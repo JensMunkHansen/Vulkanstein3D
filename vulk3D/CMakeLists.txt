@@ -5,6 +5,9 @@ endif()
 
 add_subdirectory(shaders)
 
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/launch.sh.in" "${CMAKE_CURRENT_BINARY_DIR}/launch.sh" @ONLY)
+
+if (0)
 set(TARGET_NAME vulk3D)
 add_executable(${TARGET_NAME} main.cpp)
 
@@ -17,8 +20,8 @@ target_link_libraries(${TARGET_NAME}
   ${GLFW_STATIC_LIBRARIES}
   ${Vulkan_LIBRARY})
 
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/launch.sh.in" "${CMAKE_CURRENT_BINARY_DIR}/launch.sh" @ONLY)
 
+endif()
 add_executable(app main2.cpp)
 
 # All dynamic loading
