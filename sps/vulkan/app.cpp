@@ -15,8 +15,6 @@ Application::Application(int argc, char** argv)
   spdlog::trace("Initialising vulkan-renderer");
   bool enable_renderdoc_instance_layer = false;
 
-  m_window_title = "TESTME";
-
   sps::tools::CommandLineArgumentParser cla_parser;
   cla_parser.parse_args(argc, argv);
 
@@ -113,6 +111,8 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   m_window_height = toml::find<int>(renderer_configuration, "application", "window", "height");
   m_window_title = toml::find<std::string>(renderer_configuration, "application", "window", "name");
   spdlog::trace("Window: {}, {} x {}", m_window_title, m_window_width, m_window_height);
+
+  // Create device here!!
 
 #if 0
   m_texture_files =

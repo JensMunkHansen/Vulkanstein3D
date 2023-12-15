@@ -1,9 +1,11 @@
 #pragma once
 
-#include <cstdint>
-#include <memory>
+#include <sps/vulkan/device.h>
 #include <sps/vulkan/instance.h>
 #include <sps/vulkan/window.h>
+
+#include <cstdint>
+#include <memory>
 
 namespace sps::vulkan
 {
@@ -15,8 +17,12 @@ protected:
   Window::Mode m_window_mode{ Window::Mode::WINDOWED };
   std::string m_window_title;
 
-  std::unique_ptr<sps::vulkan::Window> m_window;
+  std::unique_ptr<sps::vulkan::Device> m_device;
   std::unique_ptr<sps::vulkan::Instance> m_instance;
+  std::unique_ptr<sps::vulkan::Window> m_window;
+
+  // Multiple chains
+  void recreate_swapchain();
 
 public:
   VulkanRenderer() = default;

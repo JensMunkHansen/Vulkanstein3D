@@ -12,9 +12,11 @@ add_library(${TARGET_NAME}
   window.cpp
   instance.cpp
   representation.cpp
+  device.cpp
   renderer.cpp
   app.cpp
   exception.cpp
+  swapchain.cpp
   ../tools/cla_parser.cpp
   )
 

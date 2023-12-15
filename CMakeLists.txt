@@ -16,13 +16,15 @@ endforeach()
 
 include(CMakeDependentOption)
 
+# Download dependencies through CMake
+# include (cmake/dependencies.cmake)
+
 project(Vulkanstein3D
   VERSION 1.0
   DESCRIPTION "Vulkanstein3D is an open-source 2D rendering engine written in C/C++"
   LANGUAGES
   C
   CXX)
-
 
 option(VULK3D_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." TRUE)
 

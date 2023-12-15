@@ -26,7 +26,7 @@ Instance::Instance(Instance&& other) noexcept
 
 Instance::~Instance()
 {
-  //  m_instance.destroy(m_debugMessenger, nullptr, m_dldi);
+  m_instance.destroy(m_debugMessenger, nullptr, m_dldi);
   m_instance.destroy();
 }
 
