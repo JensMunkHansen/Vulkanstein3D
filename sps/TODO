@@ -1,1 +1,4 @@
-Exception using to_string instead
+* Exception using to_string instead
+
+Finish swapchain
+Create device

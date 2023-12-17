@@ -10,7 +10,7 @@ class Application : public VulkanRenderer
 {
 private:
   void load_toml_configuration_file(const std::string& file_name);
-  bool m_enable_validation_layers{ true };
+  bool m_stop_on_validation_message{ false };
 
 public:
   Application(int argc, char* argv[]);

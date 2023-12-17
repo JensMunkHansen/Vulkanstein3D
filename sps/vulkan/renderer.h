@@ -2,7 +2,9 @@
 
 #include <sps/vulkan/device.h>
 #include <sps/vulkan/instance.h>
+#include <sps/vulkan/swapchain.h>
 #include <sps/vulkan/window.h>
+#include <sps/vulkan/windowsurface.h>
 
 #include <cstdint>
 #include <memory>
@@ -17,9 +19,13 @@ protected:
   Window::Mode m_window_mode{ Window::Mode::WINDOWED };
   std::string m_window_title;
 
-  std::unique_ptr<sps::vulkan::Device> m_device;
-  std::unique_ptr<sps::vulkan::Instance> m_instance;
+  bool m_vsync_enabled{ false };
+
   std::unique_ptr<sps::vulkan::Window> m_window;
+  std::unique_ptr<sps::vulkan::Instance> m_instance;
+  std::unique_ptr<sps::vulkan::Device> m_device;
+  std::unique_ptr<sps::vulkan::WindowSurface> m_surface;
+  std::unique_ptr<sps::vulkan::Swapchain> m_swapchain;
 
   // Multiple chains
   void recreate_swapchain();

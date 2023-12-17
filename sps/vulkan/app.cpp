@@ -3,6 +3,7 @@
 #include <sps/tools/cla_parser.hpp>
 #include <sps/vulkan/app.h>
 #include <sps/vulkan/meta.hpp>
+#include <sps/vulkan/windowsurface.h>
 
 #include <spdlog/spdlog.h>
 #include <toml.hpp>
@@ -13,6 +14,8 @@ namespace sps::vulkan
 Application::Application(int argc, char** argv)
 {
   spdlog::trace("Initialising vulkan-renderer");
+
+  // Not working
   bool enable_renderdoc_instance_layer = false;
 
   sps::tools::CommandLineArgumentParser cla_parser;
@@ -41,6 +44,8 @@ Application::Application(int argc, char** argv)
 #endif
   }
 
+  bool enable_validation_layers = true;
+
   // If the user specified command line argument "--no-validation", the Khronos validation instance
   // layer will be disabled. For debug builds, this is not advisable! Always use validation layers
   // during development!
@@ -48,7 +53,7 @@ Application::Application(int argc, char** argv)
   if (disable_validation.value_or(false))
   {
     spdlog::warn("--no-validation specified, disabling validation layers");
-    m_enable_validation_layers = false;
+    enable_validation_layers = false;
   }
 
   spdlog::trace("Creating Vulkan instance");
@@ -62,7 +67,106 @@ Application::Application(int argc, char** argv)
   m_instance = std::make_unique<sps::vulkan::Instance>(APP_NAME, ENGINE_NAME,
     VK_MAKE_API_VERSION(0, APP_VERSION[0], APP_VERSION[1], APP_VERSION[2]),
     VK_MAKE_API_VERSION(0, ENGINE_VERSION[0], ENGINE_VERSION[1], ENGINE_VERSION[2]),
-    m_enable_validation_layers, enable_renderdoc_instance_layer);
+    enable_validation_layers, enable_renderdoc_instance_layer);
+
+  m_surface = std::make_unique<sps::vulkan::WindowSurface>(m_instance->instance(), m_window->get());
+
+#ifndef NDEBUG
+  if (cla_parser.arg<bool>("--stop-on-validation-message").value_or(false))
+  {
+    spdlog::warn("--stop-on-validation-message specified. Application will call a breakpoint after "
+                 "reporting a "
+                 "validation layer message");
+    m_stop_on_validation_message = true;
+  }
+
+  m_instance->setup_vulkan_debug_callback();
+#endif
+
+  spdlog::trace("Creating window surface");
+  auto preferred_graphics_card = cla_parser.arg<std::uint32_t>("--gpu");
+  if (preferred_graphics_card)
+  {
+    spdlog::trace("Preferential graphics card index {} specified", *preferred_graphics_card);
+  }
+
+  const auto enable_vertical_synchronisation = cla_parser.arg<bool>("--vsync");
+  if (enable_vertical_synchronisation.value_or(false))
+  {
+    spdlog::trace("V-sync enabled!");
+    m_vsync_enabled = true;
+  }
+  else
+  {
+    spdlog::trace("V-sync disabled!");
+    m_vsync_enabled = false;
+  }
+
+  bool use_distinct_data_transfer_queue = true;
+
+  // Ignore distinct data transfer queue
+  const auto forbid_distinct_data_transfer_queue = cla_parser.arg<bool>("--no-separate-data-queue");
+  if (forbid_distinct_data_transfer_queue.value_or(false))
+  {
+    spdlog::warn("Command line argument --no-separate-data-queue specified");
+    spdlog::warn(
+      "This will force the application to avoid using a distinct queue for data transfer to GPU");
+    spdlog::warn("Performance loss might be a result of this!");
+    use_distinct_data_transfer_queue = false;
+  }
+
+  bool enable_debug_marker_device_extension = true;
+
+  if (!enable_renderdoc_instance_layer)
+  {
+    // Debug markers are only available if RenderDoc is enabled.
+    enable_debug_marker_device_extension = false;
+  }
+
+  // Check if Vulkan debug markers should be disabled.
+  // Those are only available if RenderDoc instance layer is enabled!
+  const auto no_vulkan_debug_markers = cla_parser.arg<bool>("--no-vk-debug-markers");
+  if (no_vulkan_debug_markers.value_or(false))
+  {
+    spdlog::warn("--no-vk-debug-markers specified, disabling useful debug markers!");
+    enable_debug_marker_device_extension = false;
+  }
+
+  const auto physical_devices = m_instance.get()->instance().enumeratePhysicalDevices();
+  if (preferred_graphics_card && *preferred_graphics_card >= physical_devices.size())
+  {
+    spdlog::critical("GPU index {} out of range!", *preferred_graphics_card);
+    throw std::runtime_error("Invalid GPU index");
+  }
+
+  const vk::PhysicalDeviceFeatures required_features{
+    // Add required physical device features here
+  };
+
+  const vk::PhysicalDeviceFeatures optional_features{
+    // Add optional physical device features here
+  };
+
+  std::vector<const char*> required_extensions{
+    // Since we want to draw on a window, we need the swapchain extension
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+  };
+
+  const vk::PhysicalDevice physical_device = preferred_graphics_card
+    ? physical_devices[*preferred_graphics_card]
+    : Device::pick_best_physical_device(
+        *m_instance, m_surface->get(), required_features, required_extensions);
+
+  // Create physical and logical device
+  m_device =
+    std::make_unique<Device>(*m_instance, m_surface->get(), use_distinct_data_transfer_queue,
+      physical_device, required_extensions, required_features, optional_features);
+
+#if 0
+  // Create swapchain - not enabled
+  m_swapchain = std::make_unique<Swapchain>(
+    *m_device, m_surface->get(), m_window->width(), m_window->height(), m_vsync_enabled);
+#endif
 }
 
 void Application::load_toml_configuration_file(const std::string& file_name)

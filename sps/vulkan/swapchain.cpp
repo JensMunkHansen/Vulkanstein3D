@@ -484,8 +484,9 @@ SwapChainBundle create_swapchain(vk::Device logicalDevice, vk::PhysicalDevice ph
 
   vk::Extent2D extent = choose_swapchain_extent(width, height, support.capabilities);
 
-  uint32_t imageCount =
-    std::min(support.capabilities.maxImageCount, support.capabilities.minImageCount + 1);
+  uint32_t imageCount = (support.capabilities.maxImageCount != 0)
+    ? std::min(support.capabilities.minImageCount + 1, support.capabilities.maxImageCount)
+    : std::max(support.capabilities.minImageCount + 1, support.capabilities.minImageCount);
 
   /*
   * VULKAN_HPP_CONSTEXPR SwapchainCreateInfoKHR(
@@ -687,7 +688,8 @@ void Swapchain::setup_swapchain(
   {
     for (auto* const img_view : m_img_views)
     {
-      vkDestroyImageView(m_device.device(), img_view, nullptr);
+      // An image view for each frame
+      m_device.device().destroyImageView(img_view);
     }
     m_imgs.clear();
     m_img_views.clear();
@@ -754,11 +756,16 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
   //  m_swapchain = std::exchange(other.m_swapchain, VK_NULL_HANDLE);
   m_surface = std::exchange(other.m_surface, VK_NULL_HANDLE);
   m_surface_format = other.m_surface_format;
-  // m_imgs = std::move(other.m_imgs);
-  // m_img_views = std::move(other.m_img_views);
+  m_imgs = std::move(other.m_imgs);
+  m_img_views = std::move(other.m_img_views);
   m_extent = other.m_extent;
   // m_img_available = std::exchange(other.m_img_available, nullptr);
   m_vsync_enabled = other.m_vsync_enabled;
+}
+
+Swapchain::~Swapchain()
+{
+  m_device.device().destroySwapchainKHR(m_swapchain.swapchain);
 }
 
 }

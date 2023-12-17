@@ -29,6 +29,18 @@ QueueFamilyIndices findQueueFamilies(vk::PhysicalDevice device, vk::SurfaceKHR s
 
 class Instance;
 
+struct DeviceInfo
+{
+  std::string name;
+  vk::PhysicalDevice physical_device{ nullptr };
+  vk::PhysicalDeviceType type{ VK_PHYSICAL_DEVICE_TYPE_OTHER };
+  vk::DeviceSize total_device_local{ 0 };
+  vk::PhysicalDeviceFeatures features{};
+  std::vector<vk::ExtensionProperties> extensions;
+  bool presentation_supported{ false };
+  bool swapchain_supported{ false };
+};
+
 /*
  * Vulkan separates the concept of physical and logical devices.
  *
@@ -42,6 +54,26 @@ class Instance;
 class Device
 {
 public:
+  /// Find a queue family index that suits a specific criteria
+  /// @param criteria_lambda The lambda to sort out unsuitable queue families
+  /// @return The queue family index which was found (if any), ``std::nullopt`` otherwise
+  std::optional<std::uint32_t> find_queue_family_index_if(
+    const std::function<bool(std::uint32_t index, const vk::QueueFamilyProperties&)>&
+      criteria_lambda);
+
+  bool is_presentation_supported(
+    const vk::SurfaceKHR& surface, const std::uint32_t queue_family_index) const;
+
+  static vk::PhysicalDevice pick_best_physical_device( //
+    const Instance& inst, const vk::SurfaceKHR& surface,
+    const vk::PhysicalDeviceFeatures& required_features,
+    std::span<const char*> required_extensions);
+
+  static vk::PhysicalDevice pick_best_physical_device(
+    std::vector<DeviceInfo>&& physical_device_infos,
+    const vk::PhysicalDeviceFeatures& required_features,
+    const std::span<const char*> required_extensions);
+
   Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinct_transfer_queue,
     vk::PhysicalDevice physical_device, std::span<const char*> required_extensions,
     const vk::PhysicalDeviceFeatures& required_features,
@@ -56,6 +88,9 @@ public:
 
   [[nodiscard]] vk::Device device() const { return m_device; }
   [[nodiscard]] vk::PhysicalDevice physicalDevice() const { return m_physical_device; }
+
+  [[nodiscard]] const std::string& gpu_name() const { return m_gpu_name; }
+
   void wait_idle() const;
 
   vk::SurfaceCapabilitiesKHR surfaceCapabilities(const vk::SurfaceKHR& surface) const;
@@ -67,11 +102,26 @@ public:
     void* object, vk::DebugReportObjectTypeEXT object_type, const std::string& name) const;
 
 private:
-  mutable std::mutex m_mutex;
   //  mutable std::vector<std::unique_ptr<CommandPool>> m_cmd_pools;
 
   vk::Device m_device{ VK_NULL_HANDLE };
   vk::PhysicalDevice m_physical_device{ VK_NULL_HANDLE };
+  std::string m_gpu_name;
+
+  vk::PhysicalDeviceFeatures m_enabled_features{};
+
+  vk::Queue m_graphics_queue{ VK_NULL_HANDLE };
+  vk::Queue m_present_queue{ VK_NULL_HANDLE };
+  vk::Queue m_transfer_queue{ VK_NULL_HANDLE };
+
+  std::uint32_t m_present_queue_family_index{ 0 };
+  std::uint32_t m_graphics_queue_family_index{ 0 };
+  std::uint32_t m_transfer_queue_family_index{ 0 };
+
+  mutable std::vector<std::unique_ptr<vk::CommandPool>> m_cmd_pools;
+  mutable std::mutex m_mutex;
+
+  vk::DispatchLoaderDynamic m_dldi;
 
   // Debug markers
   PFN_vkDebugMarkerSetObjectTagEXT m_vk_debug_marker_set_object_tag{ nullptr };

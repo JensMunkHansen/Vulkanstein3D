@@ -103,6 +103,8 @@ Instance::Instance(const std::string& application_name, const std::string& engin
   const std::vector<std::string>& requested_instance_extensions,
   const std::vector<std::string>& requested_instance_layers)
 {
+  m_enable_validation_layers = enable_validation_layers;
+
   assert(!application_name.empty());
   assert(!engine_name.empty());
 
@@ -306,5 +308,13 @@ Instance::Instance(const std::string& application_name, const std::string& engin
   : Instance(application_name, engine_name, application_version, engine_version,
       enable_validation_layers, enable_renderdoc_layer, {}, {})
 {
+}
+void Instance::setup_vulkan_debug_callback()
+{
+  if (m_enable_validation_layers)
+  {
+    spdlog::trace("Khronos validation layers are enabled");
+  }
+  // TODO:::
 }
 }

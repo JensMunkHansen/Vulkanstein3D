@@ -17,6 +17,7 @@ add_library(${TARGET_NAME}
   app.cpp
   exception.cpp
   swapchain.cpp
+  windowsurface.cpp
   ../tools/cla_parser.cpp
   )
 
