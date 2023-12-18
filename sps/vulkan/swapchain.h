@@ -54,7 +54,7 @@ private:
   Device& m_device;
 
   // FIXME;
-  SwapChainBundle m_swapchain; //{ VK_NULL_HANDLE };
+  SwapChainBundle m_swapchain2; //{ VK_NULL_HANDLE };
   VkSurfaceKHR m_surface{ VK_NULL_HANDLE };
   std::optional<vk::SurfaceFormatKHR> m_surface_format{};
   std::vector<vk::Image> m_imgs;
@@ -63,9 +63,28 @@ private:
   // images
   // image views
   vk::Extent2D m_extent{};
+  vk::SwapchainKHR m_swapchain{};
+
   //  std::unique_ptr<Semaphore> m_img_available;
   [[nodiscard]] std::vector<vk::Image> get_swapchain_images();
   bool m_vsync_enabled{ false };
+
+  std::optional<vk::CompositeAlphaFlagBitsKHR> choose_composite_alpha(
+    const vk::CompositeAlphaFlagBitsKHR request_composite_alpha,
+    const vk::CompositeAlphaFlagsKHR supported_composite_alpha);
+
+  vk::Extent2D choose_image_extent(const vk::Extent2D& requested_extent,
+    const vk::Extent2D& min_extent, const vk::Extent2D& max_extent,
+    const vk::Extent2D& current_extent);
+
+  // Make this default to mailbox
+  vk::PresentModeKHR choose_present_mode(
+    const std::vector<vk::PresentModeKHR>& available_present_modes,
+    const std::vector<vk::PresentModeKHR>& present_mode_priority_list, const bool vsync_enabled);
+
+  std::optional<vk::SurfaceFormatKHR> choose_surface_format(
+    const std::vector<vk::SurfaceFormatKHR>& available_formats,
+    const std::vector<vk::SurfaceFormatKHR>& format_prioriy_list);
 
   void setup_swapchain(
     const std::uint32_t width, const std::uint32_t height, const bool vsync_enabled);

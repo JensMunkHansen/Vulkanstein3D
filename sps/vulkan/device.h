@@ -117,10 +117,12 @@ private:
   vk::Queue m_present_queue{ VK_NULL_HANDLE };
   vk::Queue m_transfer_queue{ VK_NULL_HANDLE };
 
+public:
   std::uint32_t m_present_queue_family_index{ 0 };
   std::uint32_t m_graphics_queue_family_index{ 0 };
   std::uint32_t m_transfer_queue_family_index{ 0 };
 
+private:
   mutable std::vector<std::unique_ptr<vk::CommandPool>> m_cmd_pools;
   mutable std::mutex m_mutex;
 

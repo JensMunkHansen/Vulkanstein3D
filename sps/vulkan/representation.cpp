@@ -34,6 +34,12 @@ std::string_view as_string(const VkCompositeAlphaFlagBitsKHR flag)
   }
 }
 
+template <>
+std::string_view as_string(const vk::CompositeAlphaFlagBitsKHR flag)
+{
+  return as_string(static_cast<VkCompositeAlphaFlagBitsKHR>(flag));
+}
+
 /// Convert a VkFormat value into the corresponding std::string_view
 /// @param format The VkFormat to convert
 /// @return A std::string_view which contains the format
@@ -765,6 +771,12 @@ std::string_view as_string(const VkSurfaceFormatKHR surface_format)
   return as_string(surface_format.format);
 }
 
+template <>
+std::string_view as_string(const vk::SurfaceFormatKHR surface_format)
+{
+  return as_string(static_cast<VkFormat>(surface_format.format));
+}
+
 /// Convert a VkSurfaceTransformFlagBitsKHR value into the corresponding std::string_view
 /// @param flag The surface transform flag
 /// @return A std::string_view which contains the surface transform flag
@@ -1421,4 +1433,153 @@ This mode may result in visible tearing if rendering to the image is not timed c
   }
   return "none/undefined";
 }
+
+/**
+        Extract the alpha composite blend modes from the given bitmask.
+
+        \param bits a bitmask describing a combination of alpha composite options.
+        \returns a vector of strings describing the options.
+*/
+std::vector<std::string> log_alpha_composite_bits(vk::CompositeAlphaFlagsKHR bits)
+{
+  std::vector<std::string> result;
+
+  /*
+          typedef enum VkCompositeAlphaFlagBitsKHR {
+                  VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR = 0x00000001,
+                  VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR = 0x00000002,
+                  VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR = 0x00000004,
+                  VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR = 0x00000008,
+          } VkCompositeAlphaFlagBitsKHR;
+  */
+  if (bits & vk::CompositeAlphaFlagBitsKHR::eOpaque)
+  {
+    result.push_back("opaque (alpha ignored)");
+  }
+  if (bits & vk::CompositeAlphaFlagBitsKHR::ePreMultiplied)
+  {
+    result.push_back("pre multiplied (alpha expected to already be multiplied in image)");
+  }
+  if (bits & vk::CompositeAlphaFlagBitsKHR::ePostMultiplied)
+  {
+    result.push_back("post multiplied (alpha will be applied during composition)");
+  }
+  if (bits & vk::CompositeAlphaFlagBitsKHR::eInherit)
+  {
+    result.push_back("inherited");
+  }
+
+  return result;
+}
+
+/**
+        Extract image usage options.
+
+        \param bits a bitmask describing various image usages
+        \returns a vector of strings describing the image usages
+*/
+std::vector<std::string> log_image_usage_bits(vk::ImageUsageFlags bits)
+{
+  std::vector<std::string> result;
+
+  /*
+          typedef enum VkImageUsageFlagBits {
+                  VK_IMAGE_USAGE_TRANSFER_SRC_BIT = 0x00000001,
+                  VK_IMAGE_USAGE_TRANSFER_DST_BIT = 0x00000002,
+                  VK_IMAGE_USAGE_SAMPLED_BIT = 0x00000004,
+                  VK_IMAGE_USAGE_STORAGE_BIT = 0x00000008,
+                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = 0x00000010,
+                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT = 0x00000020,
+                  VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT = 0x00000040,
+                  VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT = 0x00000080,
+                  #ifdef VK_ENABLE_BETA_EXTENSIONS
+                          // Provided by VK_KHR_video_decode_queue
+                          VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR = 0x00000400,
+                  #endif
+                  #ifdef VK_ENABLE_BETA_EXTENSIONS
+                          // Provided by VK_KHR_video_decode_queue
+                          VK_IMAGE_USAGE_VIDEO_DECODE_SRC_BIT_KHR = 0x00000800,
+                  #endif
+                  #ifdef VK_ENABLE_BETA_EXTENSIONS
+                          // Provided by VK_KHR_video_decode_queue
+                          VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR = 0x00001000,
+                  #endif
+                  // Provided by VK_EXT_fragment_density_map
+                  VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT = 0x00000200,
+                  // Provided by VK_KHR_fragment_shading_rate
+                  VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR = 0x00000100,
+                  #ifdef VK_ENABLE_BETA_EXTENSIONS
+                          // Provided by VK_KHR_video_encode_queue
+                          VK_IMAGE_USAGE_VIDEO_ENCODE_DST_BIT_KHR = 0x00002000,
+                  #endif
+                  #ifdef VK_ENABLE_BETA_EXTENSIONS
+                          // Provided by VK_KHR_video_encode_queue
+                          VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR = 0x00004000,
+                  #endif
+                  #ifdef VK_ENABLE_BETA_EXTENSIONS
+                          // Provided by VK_KHR_video_encode_queue
+                          VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR = 0x00008000,
+                  #endif
+                  // Provided by VK_HUAWEI_invocation_mask
+                  VK_IMAGE_USAGE_INVOCATION_MASK_BIT_HUAWEI = 0x00040000,
+                  // Provided by VK_NV_shading_rate_image
+                  VK_IMAGE_USAGE_SHADING_RATE_IMAGE_BIT_NV =
+  VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR, } VkImageUsageFlagBits;
+  */
+  if (bits & vk::ImageUsageFlagBits::eTransferSrc)
+  {
+    result.push_back("transfer src: image can be used as the source of a transfer command.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eTransferDst)
+  {
+    result.push_back("transfer dst: image can be used as the destination of a transfer command.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eSampled)
+  {
+    result.push_back("sampled: image can be used to create a VkImageView suitable for occupying a \
+VkDescriptorSet slot either of type VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE or \
+VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, and be sampled by a shader.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eStorage)
+  {
+    result.push_back("storage: image can be used to create a VkImageView suitable for occupying a \
+VkDescriptorSet slot of type VK_DESCRIPTOR_TYPE_STORAGE_IMAGE.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eColorAttachment)
+  {
+    result.push_back(
+      "color attachment: image can be used to create a VkImageView suitable for use as \
+a color or resolve attachment in a VkFramebuffer.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eDepthStencilAttachment)
+  {
+    result.push_back("depth/stencil attachment: image can be used to create a VkImageView \
+suitable for use as a depth/stencil or depth/stencil resolve attachment in a VkFramebuffer.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eTransientAttachment)
+  {
+    result.push_back("transient attachment: implementations may support using memory allocations \
+with the VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT to back an image with this usage. This \
+bit can be set for any image that can be used to create a VkImageView suitable for use as \
+a color, resolve, depth/stencil, or input attachment.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eInputAttachment)
+  {
+    result.push_back("input attachment: image can be used to create a VkImageView suitable for \
+occupying VkDescriptorSet slot of type VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT; be read from \
+a shader as an input attachment; and be used as an input attachment in a framebuffer.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eFragmentDensityMapEXT)
+  {
+    result.push_back("fragment density map: image can be used to create a VkImageView suitable \
+for use as a fragment density map image.");
+  }
+  if (bits & vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR)
+  {
+    result.push_back("fragment shading rate attachment: image can be used to create a VkImageView \
+suitable for use as a fragment shading rate attachment or shading rate image");
+  }
+  return result;
+}
+
 } // namespace sps::vulkan

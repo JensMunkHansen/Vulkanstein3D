@@ -32,4 +32,10 @@ template <typename T>
 
 [[nodiscard]] std::string_view result_to_description(vk::Result result);
 
+std::vector<std::string> log_alpha_composite_bits(vk::CompositeAlphaFlagsKHR bits);
+
+std::vector<std::string> log_image_usage_bits(vk::ImageUsageFlags bits);
+
+std::string log_present_mode(vk::PresentModeKHR presentMode);
+
 } // namespace inexor::vulkan_renderer::vk_tools
