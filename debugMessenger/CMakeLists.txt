@@ -24,7 +24,6 @@ target_link_libraries(main1 PRIVATE
   ${Vulkan_LIBRARY}
 )
 
-message(${CMAKE_DL_LIBS})
 add_executable(main2 main2.cpp instance.cpp)
 target_link_libraries(main2 PUBLIC
   ${GLFW_STATIC_LIBRARIES}
@@ -34,7 +33,6 @@ target_link_libraries(main2 PUBLIC
 )
 
 
-message(${CMAKE_DL_LIBS})
 add_executable(main3 main2.cpp instance2.cpp)
 target_link_libraries(main3 PUBLIC
   ${GLFW_STATIC_LIBRARIES}

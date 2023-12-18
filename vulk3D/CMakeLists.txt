@@ -3,7 +3,9 @@ if (UNIX)
   pkg_search_module(GLFW REQUIRED glfw3)
 endif()
 
-add_subdirectory(shaders)
+if (UNIX)
+  add_subdirectory(shaders)
+endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/launch.sh.in" "${CMAKE_CURRENT_BINARY_DIR}/launch.sh" @ONLY)
 

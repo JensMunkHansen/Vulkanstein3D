@@ -3,8 +3,8 @@ set(TARGET_NAME engine)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
   
+find_package(spdlog CONFIG)
 
-find_package(spdlog CONFIG REQUIRED)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h @ONLY)
 

@@ -1,4 +1,4 @@
-find_program(GLSL_VALIDATOR glslangValidator REQUIRED)
+find_program(GLSL_VALIDATOR glslangValidator)
 if(NOT GLSL_VALIDATOR)
     message(FATAL_ERROR "glslangValidator not found!")
 endif()
