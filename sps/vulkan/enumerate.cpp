@@ -3,7 +3,7 @@
 #include <cassert>
 namespace sps::vulkan
 {
-std::vector<vtk::PhysicalDevice> get_physical_devices(const vk::Instance& inst)
+std::vector<vk::PhysicalDevice> get_physical_devices(const vk::Instance& inst)
 {
   assert(inst);
   try

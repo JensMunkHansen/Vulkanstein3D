@@ -98,6 +98,9 @@ public:
   void create_semaphore(const vk::SemaphoreCreateInfo& semaphoreCreateInfo,
     vk::Semaphore* pSemaphore, const std::string& name) const;
 
+  void create_fence(
+    const vk::FenceCreateInfo& fenceCreateInfor, vk::Fence* pFence, const std::string& name) const;
+
   void set_debug_marker_name(
     void* object, vk::DebugReportObjectTypeEXT object_type, const std::string& name) const;
 

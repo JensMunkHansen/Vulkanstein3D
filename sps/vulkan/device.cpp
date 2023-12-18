@@ -763,6 +763,21 @@ void Device::wait_idle() const
     throw;
   }
 }
+void Device::create_fence(
+  const vk::FenceCreateInfo& fenceCreateInfo, vk::Fence* pFence, const std::string& name) const
+{
+  try
+  {
+    *pFence = m_device.createFence(fenceCreateInfo);
+    set_debug_marker_name(pFence, vk::DebugReportObjectTypeEXT::eFence, name);
+  }
+  catch (vk::SystemError err)
+  {
+    spdlog::trace("Failed to create fence");
+    pFence = nullptr;
+    throw;
+  }
+}
 
 void Device::create_semaphore(const vk::SemaphoreCreateInfo& semaphoreCreateInfo,
   vk::Semaphore* pSemaphore, const std::string& name) const

@@ -14,6 +14,7 @@ add_library(${TARGET_NAME}
   representation.cpp
   device.cpp
   renderer.cpp
+  fence.cpp
   app.cpp
   exception.cpp
   swapchain.cpp
