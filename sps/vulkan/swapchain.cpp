@@ -8,63 +8,6 @@
 namespace sps::vulkan
 {
 
-std::vector<std::string> log_transform_bits(vk::SurfaceTransformFlagsKHR bits)
-{
-  std::vector<std::string> result;
-
-  /*
-          * typedef enum VkSurfaceTransformFlagBitsKHR {
-                  VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR = 0x00000001,
-                  VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR = 0x00000002,
-                  VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR = 0x00000004,
-                  VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR = 0x00000008,
-                  VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR = 0x00000010,
-                  VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR = 0x00000020,
-                  VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR = 0x00000040,
-                  VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR = 0x00000080,
-                  VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR = 0x00000100,
-          } VkSurfaceTransformFlagBitsKHR;
-  */
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eIdentity)
-  {
-    result.push_back("identity");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eRotate90)
-  {
-    result.push_back("90 degree rotation");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eRotate180)
-  {
-    result.push_back("180 degree rotation");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eRotate270)
-  {
-    result.push_back("270 degree rotation");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eHorizontalMirror)
-  {
-    result.push_back("horizontal mirror");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eHorizontalMirrorRotate90)
-  {
-    result.push_back("horizontal mirror, then 90 degree rotation");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eHorizontalMirrorRotate180)
-  {
-    result.push_back("horizontal mirror, then 180 degree rotation");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eHorizontalMirrorRotate270)
-  {
-    result.push_back("horizontal mirror, then 270 degree rotation");
-  }
-  if (bits & vk::SurfaceTransformFlagBitsKHR::eInherit)
-  {
-    result.push_back("inherited");
-  }
-
-  return result;
-}
-
 /**
         Extract the alpha composite blend modes from the given bitmask.
 
@@ -340,14 +283,14 @@ SwapChainSupportDetails query_swapchain_support(
 
     spdlog::trace("\tsupported transforms:");
     std::vector<std::string> stringList =
-      log_transform_bits(support.capabilities.supportedTransforms);
+      utils::as_description(support.capabilities.supportedTransforms);
     for (std::string line : stringList)
     {
       spdlog::trace("\t\t {}", line);
     }
 
     spdlog::trace("\tcurrent transform:");
-    stringList = log_transform_bits(support.capabilities.currentTransform);
+    stringList = utils::as_description(support.capabilities.currentTransform);
     for (std::string line : stringList)
     {
       spdlog::trace("\t\t {}", line);
@@ -590,7 +533,7 @@ void Swapchain::setup_swapchain(
   spdlog::trace("\tmaximum image array layers: {}", caps.maxImageArrayLayers);
 
   spdlog::trace("\tsupported transforms:");
-  std::vector<std::string> stringList = log_transform_bits(caps.supportedTransforms);
+  std::vector<std::string> stringList = utils::as_description(caps.supportedTransforms);
   for (std::string line : stringList)
   {
     spdlog::trace("\t\t {}", line);
@@ -598,7 +541,7 @@ void Swapchain::setup_swapchain(
 
   spdlog::trace("\tcurrent transform:");
 
-  stringList = log_transform_bits(caps.currentTransform);
+  stringList = utils::as_description(caps.currentTransform);
   for (std::string line : stringList)
   {
     spdlog::trace("\t\t {}", line);

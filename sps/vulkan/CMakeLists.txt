@@ -15,7 +15,9 @@ add_library(${TARGET_NAME}
   device.cpp
   renderer.cpp
   fence.cpp
+  frame.cpp
   app.cpp
+  semaphore.cpp
   exception.cpp
   swapchain.cpp
   windowsurface.cpp
