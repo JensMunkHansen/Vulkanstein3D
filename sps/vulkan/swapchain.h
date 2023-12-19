@@ -63,7 +63,7 @@ private:
   // images
   // image views
   vk::Extent2D m_extent{};
-  vk::SwapchainKHR m_swapchain{};
+  vk::SwapchainKHR m_swapchain{ nullptr };
 
   //  std::unique_ptr<Semaphore> m_img_available;
   [[nodiscard]] std::vector<vk::Image> get_swapchain_images();
@@ -84,7 +84,7 @@ private:
 
   std::optional<vk::SurfaceFormatKHR> choose_surface_format(
     const std::vector<vk::SurfaceFormatKHR>& available_formats,
-    const std::vector<vk::SurfaceFormatKHR>& format_prioriy_list);
+    const std::vector<vk::SurfaceFormatKHR>& format_prioriy_list = {});
 
   void setup_swapchain(
     const std::uint32_t width, const std::uint32_t height, const bool vsync_enabled);

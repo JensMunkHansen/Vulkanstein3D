@@ -12,6 +12,7 @@
 namespace sps::vulkan
 {
 
+#ifndef NEW_SWAPCHAIN
 SwapChainSupportDetails query_swapchain_support(
   vk::PhysicalDevice device, vk::SurfaceKHR surface, bool debug)
 {
@@ -279,6 +280,7 @@ VULKAN_HPP_NAMESPACE::PresentModeKHR::eImmediate, VULKAN_HPP_NAMESPACE::Bool32  
 
   return bundle;
 }
+#endif
 
 std::optional<vk::CompositeAlphaFlagBitsKHR> Swapchain::choose_composite_alpha(
   const vk::CompositeAlphaFlagBitsKHR request_composite_alpha,
@@ -495,8 +497,10 @@ void Swapchain::setup_swapchain(
 
   // End getIntoGameDev
 
-  auto formats = m_device.physicalDevice().getSurfaceFormatsKHR(m_surface);
-  m_surface_format = choose_swapchain_surface_format(formats);
+  std::vector<vk::SurfaceFormatKHR> formats =
+    m_device.physicalDevice().getSurfaceFormatsKHR(m_surface);
+  //  m_surface_format = choose_swapchain_surface_format(formats);
+  m_surface_format = choose_surface_format(formats);
 
   const vk::Extent2D requested_extent{ width, height };
 
@@ -521,7 +525,7 @@ void Swapchain::setup_swapchain(
                              "VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT is not supported!");
   }
 
-  const vk::SwapchainKHR old_swapchain = m_swapchain;
+  vk::SwapchainKHR old_swapchain = m_swapchain;
 
   uint32_t imageCount = (caps.maxImageCount != 0)
     ? std::min(caps.minImageCount + 1, caps.maxImageCount)
@@ -578,26 +582,22 @@ void Swapchain::setup_swapchain(
     throw std::runtime_error("failed to create swap chain!");
   }
 
-#if 0
-
-  // We need to destroy the old swapchain if specified
-  if (old_swapchain != VK_NULL_HANDLE)
+  if (old_swapchain != vk::SwapchainKHR(nullptr))
   {
-    for (auto* const img_view : m_img_views)
+    for (auto const img_view : m_img_views)
     {
       // An image view for each frame
       m_device.device().destroyImageView(img_view);
     }
     m_imgs.clear();
     m_img_views.clear();
-    vkDestroySwapchainKHR(m_device.device(), old_swapchain, nullptr);
+    m_device.device().destroySwapchainKHR(old_swapchain);
   }
 
   m_extent.width = width;
   m_extent.height = height;
 
-  m_imgs = get_swapchain_images();
-
+  m_imgs = m_device.device().getSwapchainImagesKHR(m_swapchain);
   if (m_imgs.empty())
   {
     throw std::runtime_error("Error: Swapchain image count is 0!");
@@ -607,30 +607,24 @@ void Swapchain::setup_swapchain(
 
   m_img_views.resize(m_imgs.size());
 
-  for (std::size_t img_index = 0; img_index < m_imgs.size(); img_index++)
+  for (std::size_t i = 0; i < m_imgs.size(); i++)
   {
-    const auto img_view_ci = make_info<VkImageViewCreateInfo>({
-      .image = m_imgs[img_index],
-      .viewType = VK_IMAGE_VIEW_TYPE_2D,
-      .format = m_surface_format.value().format,
-      .components{
-        .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-        .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-        .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-        .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-      },
-      .subresourceRange{
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .baseMipLevel = 0,
-        .levelCount = 1,
-        .baseArrayLayer = 0,
-        .layerCount = 1,
-      },
-    });
+    vk::ImageViewCreateInfo createInfo = {};
+    createInfo.image = m_imgs[i];
+    createInfo.viewType = vk::ImageViewType::e2D;
+    createInfo.format = m_surface_format.value().format;
+    createInfo.components.r = vk::ComponentSwizzle::eIdentity;
+    createInfo.components.g = vk::ComponentSwizzle::eIdentity;
+    createInfo.components.b = vk::ComponentSwizzle::eIdentity;
+    createInfo.components.a = vk::ComponentSwizzle::eIdentity;
+    createInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    createInfo.subresourceRange.baseMipLevel = 0;
+    createInfo.subresourceRange.levelCount = 1;
+    createInfo.subresourceRange.baseArrayLayer = 0;
+    createInfo.subresourceRange.layerCount = 1;
 
-    m_device.create_image_view(img_view_ci, &m_img_views[img_index], "swapchain image view");
+    m_device.create_image_view(createInfo, &m_img_views[i], "swapchain image view");
   }
-#endif
 }
 
 Swapchain::Swapchain(Device& device, const VkSurfaceKHR surface, const std::uint32_t width,
@@ -668,5 +662,9 @@ Swapchain::~Swapchain()
 #else
   m_device.device().destroySwapchainKHR(m_swapchain2.swapchain);
 #endif
+  for (auto const img_view : m_img_views)
+  {
+    m_device.device().destroyImageView(img_view);
+  }
 }
 }

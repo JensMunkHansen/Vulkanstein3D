@@ -779,6 +779,21 @@ void Device::create_fence(
   }
 }
 
+void Device::create_image_view(const vk::ImageViewCreateInfo& image_view_ci,
+  vk::ImageView* pImageView, const std::string& name) const
+{
+  try
+  {
+    *pImageView = m_device.createImageView(image_view_ci);
+    set_debug_marker_name(pImageView, vk::DebugReportObjectTypeEXT::eImageView, name);
+  }
+  catch (vk::SystemError err)
+  {
+    pImageView = nullptr;
+    throw;
+  }
+}
+
 void Device::create_semaphore(const vk::SemaphoreCreateInfo& semaphoreCreateInfo,
   vk::Semaphore* pSemaphore, const std::string& name) const
 {

@@ -101,6 +101,9 @@ public:
   void create_fence(
     const vk::FenceCreateInfo& fenceCreateInfor, vk::Fence* pFence, const std::string& name) const;
 
+  void create_image_view(const vk::ImageViewCreateInfo& image_view_ci, vk::ImageView* image_view,
+    const std::string& name) const;
+
   void set_debug_marker_name(
     void* object, vk::DebugReportObjectTypeEXT object_type, const std::string& name) const;
 
