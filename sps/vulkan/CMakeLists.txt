@@ -18,11 +18,14 @@ add_library(${TARGET_NAME}
   fence.cpp
   frame.cpp
   app.cpp
+  shaders.cpp
   semaphore.cpp
   exception.cpp
   swapchain.cpp
   swapchain_simple.cpp
+  pipeline.cpp
   windowsurface.cpp
+  framebuffer.cpp
   ../tools/cla_parser.cpp
   )
 
@@ -43,6 +46,10 @@ target_compile_options(
   "$<$<CONFIG:Debug>:-DSPS_DEBUG>"
   "$<$<CONFIG:Release>:>"
 )
+
+add_subdirectory(shaders)
+
+
 
 if (0)
 string(

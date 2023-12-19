@@ -3,6 +3,7 @@
 #include <string>
 
 #include <sps/vulkan/renderer.h>
+#include <vulkan/vulkan_handles.hpp>
 
 namespace sps::vulkan
 {
@@ -15,5 +16,15 @@ private:
 public:
   Application(int argc, char* argv[]);
   void run();
+  void make_pipeline();
+  void finalize_setup();
+  void render();
+  ~Application();
+
+private:
+  bool m_debugMode = true;
+  vk::PipelineLayout m_pipelineLayout;
+  vk::RenderPass m_renderpass;
+  vk::Pipeline m_pipeline;
 };
 }

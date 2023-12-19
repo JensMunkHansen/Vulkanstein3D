@@ -369,8 +369,7 @@ Swapchain::Swapchain(Device& device, const VkSurfaceKHR surface, const std::uint
 Swapchain::Swapchain(Swapchain&& other) noexcept
   : m_device(other.m_device)
 {
-  // FIXME!!!!
-  //  m_swapchain = std::exchange(other.m_swapchain, VK_NULL_HANDLE);
+  m_swapchain = std::exchange(other.m_swapchain, VK_NULL_HANDLE);
   m_surface = std::exchange(other.m_surface, VK_NULL_HANDLE);
   m_surface_format = other.m_surface_format;
   m_imgs = std::move(other.m_imgs);

@@ -24,8 +24,7 @@ class Swapchain
 private:
   Device& m_device;
 
-  // FIXME;
-  VkSurfaceKHR m_surface{ VK_NULL_HANDLE };
+  vk::SurfaceKHR m_surface{ VK_NULL_HANDLE };
   std::optional<vk::SurfaceFormatKHR> m_surface_format{};
   // images
   std::vector<vk::Image> m_imgs;
@@ -70,5 +69,16 @@ public:
 
   Swapchain& operator=(const Swapchain&) = delete;
   Swapchain& operator=(Swapchain&&) = delete;
+
+  [[nodiscard]] const vk::Extent2D extent() const { return m_extent; }
+  [[nodiscard]] std::uint32_t image_count() const
+  {
+    return static_cast<std::uint32_t>(m_imgs.size());
+  }
+
+  [[nodiscard]] vk::Format image_format() const { return m_surface_format.value().format; }
+
+  [[nodiscard]] const std::vector<vk::ImageView>& image_views() const { return m_img_views; }
+  [[nodiscard]] const vk::SwapchainKHR* swapchain() const { return &m_swapchain; }
 };
 };
