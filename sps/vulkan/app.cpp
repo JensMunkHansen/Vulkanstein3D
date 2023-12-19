@@ -24,6 +24,8 @@ namespace sps::vulkan
 
 Application::Application(int argc, char** argv)
 {
+  m_lastTime = glfwGetTime();
+
   spdlog::trace("Initialising vulkan-renderer");
 
   // Not working
@@ -72,8 +74,9 @@ Application::Application(int argc, char** argv)
   m_window_width = 640;
   m_window_height = 480;
 
+  const bool resizeable = false;
   m_window = std::make_unique<sps::vulkan::Window>(
-    m_window_title, m_window_width, m_window_height, true, true, m_window_mode);
+    m_window_title, m_window_width, m_window_height, true, resizeable, m_window_mode);
 
   m_instance = std::make_unique<sps::vulkan::Instance>(APP_NAME, ENGINE_NAME,
     VK_MAKE_API_VERSION(0, APP_VERSION[0], APP_VERSION[1], APP_VERSION[2]),
@@ -82,7 +85,7 @@ Application::Application(int argc, char** argv)
 
   m_surface = std::make_unique<sps::vulkan::WindowSurface>(m_instance->instance(), m_window->get());
 
-#ifndef NDEBUG
+#ifndef SPS_DEBUG
   if (cla_parser.arg<bool>("--stop-on-validation-message").value_or(false))
   {
     spdlog::warn("--stop-on-validation-message specified. Application will call a breakpoint after "
@@ -228,50 +231,6 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   m_window_height = toml::find<int>(renderer_configuration, "application", "window", "height");
   m_window_title = toml::find<std::string>(renderer_configuration, "application", "window", "name");
   spdlog::trace("Window: {}, {} x {}", m_window_title, m_window_width, m_window_height);
-
-  // Create device here!!
-
-#if 0
-  m_texture_files =
-    toml::find<std::vector<std::string>>(renderer_configuration, "textures", "files");
-
-  spdlog::trace("Textures:");
-
-  for (const auto& texture_file : m_texture_files)
-  {
-    spdlog::trace("   - {}", texture_file);
-  }
-
-  m_gltf_model_files =
-    toml::find<std::vector<std::string>>(renderer_configuration, "glTFmodels", "files");
-
-  spdlog::trace("glTF 2.0 models:");
-
-  for (const auto& gltf_model_file : m_gltf_model_files)
-  {
-    spdlog::trace("   - {}", gltf_model_file);
-  }
-
-  m_vertex_shader_files =
-    toml::find<std::vector<std::string>>(renderer_configuration, "shaders", "vertex", "files");
-
-  spdlog::trace("Vertex shaders:");
-
-  for (const auto& vertex_shader_file : m_vertex_shader_files)
-  {
-    spdlog::trace("   - {}", vertex_shader_file);
-  }
-
-  m_fragment_shader_files =
-    toml::find<std::vector<std::string>>(renderer_configuration, "shaders", "fragment", "files");
-
-  spdlog::trace("Fragment shaders:");
-
-  for (const auto& fragment_shader_file : m_fragment_shader_files)
-  {
-    spdlog::trace("   - {}", fragment_shader_file);
-  }
-#endif
 }
 
 void Application::run()
@@ -282,6 +241,7 @@ void Application::run()
   {
     m_window->poll();
     render();
+    calculateFrameRate();
   }
 }
 
@@ -333,6 +293,24 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
       std::cout << "failed to record command buffer!" << std::endl;
     }
   }
+}
+
+void Application::calculateFrameRate()
+{
+  m_currentTime = glfwGetTime();
+  double delta = m_currentTime - m_lastTime;
+
+  if (delta >= 1)
+  {
+    int framerate{ std::max(1, int(m_numFrames / delta)) };
+    std::stringstream title;
+    title << "Running at " << framerate << " fps.";
+    glfwSetWindowTitle(m_window->get(), title.str().c_str());
+    m_lastTime = m_currentTime;
+    m_numFrames = -1;
+    m_frameTime = float(1000.0 / framerate);
+  }
+  m_numFrames++;
 }
 
 void Application::render()

@@ -9,6 +9,9 @@
 
 #include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_structs.hpp>
+#include <vulkan/vulkan_to_string.hpp>
+
+// #define USE_SIMPLE_SWAPCHAIN 1
 
 namespace sps::vulkan
 {
@@ -65,6 +68,9 @@ vk::PresentModeKHR Swapchain::choose_present_mode(
 {
   assert(!available_present_modes.empty());
   assert(!present_mode_priority_list.empty());
+
+  vk::PresentModeKHR chosenPresentMode = vk::PresentModeKHR::eFifo;
+
   if (!vsync_enabled)
   {
     for (const auto requested_present_mode : present_mode_priority_list)
@@ -73,11 +79,14 @@ vk::PresentModeKHR Swapchain::choose_present_mode(
         available_present_modes.begin(), available_present_modes.end(), requested_present_mode);
       if (present_mode != available_present_modes.end())
       {
-        return *present_mode;
+        chosenPresentMode = *present_mode;
+        break;
       }
     }
   }
-  return vk::PresentModeKHR::eFifo;
+  // chosenPresentMode = vk::PresentModeKHR::eImmediate;
+  spdlog::trace("Chosen present mode: {}", vk::to_string(chosenPresentMode));
+  return chosenPresentMode;
 }
 
 std::optional<vk::SurfaceFormatKHR> Swapchain::choose_surface_format(
@@ -87,6 +96,7 @@ std::optional<vk::SurfaceFormatKHR> Swapchain::choose_surface_format(
   assert(!available_formats.empty());
 
   // Try to find one of the formats in the priority list
+  spdlog::trace("The format priority list has {} elements", format_prioriy_list.size());
   for (const auto requested_format : format_prioriy_list)
   {
     const auto format = std::find_if(available_formats.begin(), available_formats.end(),
@@ -106,7 +116,8 @@ std::optional<vk::SurfaceFormatKHR> Swapchain::choose_surface_format(
   spdlog::trace("Selecting surface format from default list");
 
   static const std::vector<vk::SurfaceFormatKHR> default_surface_format_priority_list{
-    { vk::Format::eR8G8B8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear },
+    //    { vk::Format::eR8G8B8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear },
+    { vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear },
     { vk::Format::eB8G8R8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear }
   };
 
@@ -229,12 +240,32 @@ void Swapchain::setup_swapchain(
 
   std::vector<vk::SurfaceFormatKHR> formats =
     m_device.physicalDevice().getSurfaceFormatsKHR(m_surface);
-  //  m_surface_format = choose_swapchain_surface_format(formats);
+
+  spdlog::trace("supported surface format");
+  for (vk::SurfaceFormatKHR supportedFormat : formats)
+  {
+    /*
+     * typedef struct VkSurfaceFormatKHR {
+     VkFormat           format;
+     VkColorSpaceKHR    colorSpace;
+     } VkSurfaceFormatKHR;
+    */
+    spdlog::trace("\tpixel format: {}\tcolor space: {}", vk::to_string(supportedFormat.format),
+      vk::to_string(supportedFormat.colorSpace));
+  }
+
+  // m_surface_format = sps::vulkan::choose_swapchain_surface_format(formats);
   m_surface_format = choose_surface_format(formats);
 
   const vk::Extent2D requested_extent{ width, height };
 
+  // Display the supported present modes
   auto presentModes = m_device.physicalDevice().getSurfacePresentModesKHR(m_surface);
+  spdlog::trace("supported present modes");
+  for (vk::PresentModeKHR presentMode : presentModes)
+  {
+    spdlog::trace("\t {}", utils::log_present_mode(presentMode));
+  }
 
   static const std::vector<vk::PresentModeKHR> default_present_mode_priorities{
     vk::PresentModeKHR::eMailbox, vk::PresentModeKHR::eFifoRelaxed, vk::PresentModeKHR::eFifo
@@ -297,6 +328,7 @@ void Swapchain::setup_swapchain(
   createInfo.presentMode =
     choose_present_mode(m_device.physicalDevice().getSurfacePresentModesKHR(m_surface),
       default_present_mode_priorities, vsync_enabled);
+
   createInfo.oldSwapchain = old_swapchain;
 
   spdlog::trace("Using swapchain surface transform {}", vk::to_string(createInfo.preTransform));
@@ -363,7 +395,13 @@ Swapchain::Swapchain(Device& device, const VkSurfaceKHR surface, const std::uint
   , m_surface(surface)
   , m_vsync_enabled(vsync_enabled)
 {
+#ifdef USE_SIMPLE_SWAPCHAIN
+  SwapChainBundle bundle =
+    create_swapchain(m_device.device(), m_device.physicalDevice(), surface, width, height, true);
+  m_swapchain = bundle.swapchain;
+#else
   setup_swapchain(width, height, vsync_enabled);
+#endif
 }
 
 Swapchain::Swapchain(Swapchain&& other) noexcept

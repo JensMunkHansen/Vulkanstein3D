@@ -23,12 +23,18 @@ public:
   void finalize_setup();
   void record_draw_commands(vk::CommandBuffer, uint32_t imageIndex);
 
+  void calculateFrameRate();
+
   void render();
   ~Application();
 
 private:
   // HACK
   bool m_debugMode = true;
+  double m_lastTime, m_currentTime;
+  int m_numFrames;
+  float m_frameTime;
+
   std::vector<vk::Framebuffer> m_frameBuffers;
   vk::PipelineLayout m_pipelineLayout;
   vk::RenderPass m_renderpass;
