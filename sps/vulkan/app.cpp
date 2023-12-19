@@ -1,3 +1,4 @@
+#include <memory>
 #include <sps/vulkan/config.h>
 
 #include <sps/tools/cla_parser.hpp>
@@ -6,8 +7,12 @@
 #include <sps/vulkan/windowsurface.h>
 
 // Dirty-hacks
+#include <sps/vulkan/commands.h>
 #include <sps/vulkan/framebuffer.h>
 #include <sps/vulkan/pipeline.h>
+
+#include <sps/vulkan/fence.h>
+#include <sps/vulkan/semaphore.h>
 
 #include <spdlog/spdlog.h>
 #include <toml.hpp>
@@ -174,6 +179,7 @@ Application::Application(int argc, char** argv)
 
   // Make pipeline
   make_pipeline();
+  finalize_setup();
 }
 
 void Application::load_toml_configuration_file(const std::string& file_name)
@@ -275,36 +281,73 @@ void Application::run()
   while (!m_window->should_close())
   {
     m_window->poll();
+    render();
+  }
+}
+
+void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t imageIndex)
+{
+
+  vk::CommandBufferBeginInfo beginInfo = {};
+
+  try
+  {
+    commandBuffer.begin(beginInfo);
+  }
+  catch (vk::SystemError err)
+  {
+    if (m_debugMode)
+    {
+      std::cout << "Failed to begin recording command buffer!" << std::endl;
+    }
+  }
+
+  vk::RenderPassBeginInfo renderPassInfo = {};
+  renderPassInfo.renderPass = m_renderpass;
+  renderPassInfo.framebuffer = m_frameBuffers[imageIndex];
+  renderPassInfo.renderArea.offset.x = 0;
+  renderPassInfo.renderArea.offset.y = 0;
+  renderPassInfo.renderArea.extent = m_swapchain->extent();
+
+  vk::ClearValue clearColor = { std::array<float, 4>{ 1.0f, 0.5f, 0.25f, 1.0f } };
+  renderPassInfo.clearValueCount = 1;
+  renderPassInfo.pClearValues = &clearColor;
+
+  commandBuffer.beginRenderPass(&renderPassInfo, vk::SubpassContents::eInline);
+
+  commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+
+  commandBuffer.draw(3, 1, 0, 0);
+
+  commandBuffer.endRenderPass();
+
+  try
+  {
+    commandBuffer.end();
+  }
+  catch (vk::SystemError err)
+  {
+
+    if (m_debugMode)
+    {
+      std::cout << "failed to record command buffer!" << std::endl;
+    }
   }
 }
 
 void Application::render()
 {
-#if 0
-  vk::Result result = m_device->device().waitForFences(1, &inFlightFence, VK_TRUE, UINT64_MAX);
 
-  if (result != vk::Result::eSuccess)
-  {
-    if (m_debugMode)
-    {
-      std::cout << "error waiting for fence" << std::endl;
-    }
-  }
-  result = device.resetFences(1, &inFlightFence);
-  if (result != vk::Result::eSuccess)
-  {
-    if (m_debugMode)
-    {
-      std::cout << "failed to reset fence" << std::endl;
-    }
-  }
+  m_inFlight->block();
+  m_inFlight->reset();
 
   // acquireNextImageKHR(vk::SwapChainKHR, timeout, semaphore_to_signal, fence)
-  uint32_t imageIndex{
-    device.acquireNextImageKHR(swapchain, UINT64_MAX, imageAvailable, nullptr).value
-  };
+  uint32_t imageIndex{ m_device->device()
+                         .acquireNextImageKHR(*m_swapchain->swapchain(), UINT64_MAX,
+                           *m_imageAvailable->semaphore(), nullptr)
+                         .value };
 
-  vk::CommandBuffer commandBuffer = swapchainFrames[imageIndex].commandBuffer;
+  vk::CommandBuffer commandBuffer = m_commandBuffers[imageIndex];
 
   commandBuffer.reset();
 
@@ -312,7 +355,8 @@ void Application::render()
 
   vk::SubmitInfo submitInfo = {};
 
-  vk::Semaphore waitSemaphores[] = { imageAvailable };
+  vk::Semaphore waitSemaphores[] = { *m_imageAvailable->semaphore() };
+
   vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
   submitInfo.waitSemaphoreCount = 1;
   submitInfo.pWaitSemaphores = waitSemaphores;
@@ -321,13 +365,14 @@ void Application::render()
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &commandBuffer;
 
-  vk::Semaphore signalSemaphores[] = { renderFinished };
+  vk::Semaphore signalSemaphores[] = { *m_renderFinished->semaphore() };
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
 
+  // Get queues from device, graphics and present queue
   try
   {
-    graphicsQueue.submit(submitInfo, inFlightFence);
+    m_device->graphics_queue().submit(submitInfo, m_inFlight->get());
   }
   catch (vk::SystemError err)
   {
@@ -342,13 +387,13 @@ void Application::render()
   presentInfo.waitSemaphoreCount = 1;
   presentInfo.pWaitSemaphores = signalSemaphores;
 
-  vk::SwapchainKHR swapChains[] = { swapchain };
+  vk::SwapchainKHR swapChains[] = { *m_swapchain->swapchain() };
   presentInfo.swapchainCount = 1;
   presentInfo.pSwapchains = swapChains;
 
   presentInfo.pImageIndices = &imageIndex;
 
-  result = presentQueue.presentKHR(presentInfo);
+  vk::Result result = m_device->present_queue().presentKHR(presentInfo);
   if (result != vk::Result::eSuccess)
   {
     if (m_debugMode)
@@ -356,7 +401,6 @@ void Application::render()
       std::cout << "Error presenting" << std::endl;
     }
   }
-#endif
 }
 
 void Application::make_pipeline()
@@ -379,9 +423,23 @@ void Application::make_pipeline()
 Application::~Application()
 {
   spdlog::trace("Destroying Application");
+
+  m_device->wait_idle();
+
+  m_inFlight.reset(nullptr);
+  m_imageAvailable.reset(nullptr);
+  m_renderFinished.reset(nullptr);
+
+  m_device->device().destroyCommandPool(m_commandPool);
+
   m_device->device().destroyPipeline(m_pipeline);
   m_device->device().destroyPipelineLayout(m_pipelineLayout);
   m_device->device().destroyRenderPass(m_renderpass);
+
+  for (auto framebuffer : m_frameBuffers)
+  {
+    m_device->device().destroyFramebuffer(framebuffer);
+  }
 
   // Swapchain destroyed in renderer
   // Surface ..
@@ -396,19 +454,15 @@ void Application::finalize_setup()
   frameBufferInput.renderpass = m_renderpass;
   frameBufferInput.swapchainExtent = m_swapchain->extent();
 
-  sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
+  m_frameBuffers = sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
 
-#if 0
-  m_commandPool = sps::vulkan::make_command_pool(m_device->device(),
-						 m_device->physical_device(),
-						 surface, m_debugMode);
+  m_commandPool = sps::vulkan::make_command_pool(*m_device, m_debugMode);
 
-  sps::vulkan::commandBufferInputChunk commandBufferInput = { device, commandPool, swapchainFrames };
-  mainCommandBuffer = vkInit::make_command_buffers(commandBufferInput, m_debugMode);
+  m_mainCommandBuffer = sps::vulkan::make_command_buffers(
+    *m_device, *m_swapchain, m_commandPool, m_commandBuffers, true);
 
-  inFlightFence = vkInit::make_fence(device, m_debugMode);
-  imageAvailable = vkInit::make_semaphore(device, m_debugMode);
-  renderFinished = vkInit::make_semaphore(device, m_debugMode);
-#endif
+  m_inFlight = std::make_unique<Fence>(*m_device, "in-flight", true);
+  m_imageAvailable = std::make_unique<Semaphore>(*m_device, "image-available");
+  m_renderFinished = std::make_unique<Semaphore>(*m_device, "render-finished");
 }
 }

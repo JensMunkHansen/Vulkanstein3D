@@ -25,6 +25,7 @@ add_library(${TARGET_NAME}
   swapchain_simple.cpp
   pipeline.cpp
   windowsurface.cpp
+  commands.cpp
   framebuffer.cpp
   ../tools/cla_parser.cpp
   )

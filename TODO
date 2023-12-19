@@ -1,0 +1,4 @@
+1. Swap-chain image + views
+2. Render triangle
+3. Threaded rendering
+4. Pipeline with compute, vertex, fragment

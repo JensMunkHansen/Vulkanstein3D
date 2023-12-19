@@ -3,6 +3,7 @@
 #include <sps/vulkan/swapchain.h>
 
 #include <iostream>
+#include <vulkan/vulkan_handles.hpp>
 
 namespace sps::vulkan
 {
@@ -14,16 +15,15 @@ namespace sps::vulkan
         \param frames the vector to be populated with the created framebuffers
         \param debug whether the system is running in debug mode.
 */
-void make_framebuffers(framebufferInput inputChunk, //
+std::vector<vk::Framebuffer> make_framebuffers(framebufferInput inputChunk, //
   const Swapchain& swapchain, bool debug)
 {
-#if 0
-  
-  for (int i = 0; i < frames.size(); ++i)
+  std::vector<vk::Framebuffer> frameBuffers;
+  frameBuffers.resize(swapchain.image_count());
+
+  for (size_t i = 0; i < swapchain.image_count(); i++)
   {
-
-    std::vector<vk::ImageView> attachments = { frames[i].imageView };
-
+    std::vector<vk::ImageView> attachments = { swapchain.image_views()[i] };
     vk::FramebufferCreateInfo framebufferInfo;
     framebufferInfo.flags = vk::FramebufferCreateFlags();
     framebufferInfo.renderPass = inputChunk.renderpass;
@@ -32,10 +32,9 @@ void make_framebuffers(framebufferInput inputChunk, //
     framebufferInfo.width = inputChunk.swapchainExtent.width;
     framebufferInfo.height = inputChunk.swapchainExtent.height;
     framebufferInfo.layers = 1;
-
     try
     {
-      frames[i].framebuffer = inputChunk.device.createFramebuffer(framebufferInfo);
+      frameBuffers[i] = inputChunk.device.createFramebuffer(framebufferInfo);
 
       if (debug)
       {
@@ -50,6 +49,6 @@ void make_framebuffers(framebufferInput inputChunk, //
       }
     }
   }
-#endif
+  return frameBuffers;
 }
 }

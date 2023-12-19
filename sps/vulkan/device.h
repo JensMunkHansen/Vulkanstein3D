@@ -78,6 +78,12 @@ public:
 
   [[nodiscard]] const std::string& gpu_name() const { return m_gpu_name; }
 
+  [[nodiscard]] vk::Queue graphics_queue() const { return m_graphics_queue; }
+
+  [[nodiscard]] vk::Queue present_queue() const { return m_present_queue; }
+
+  [[nodiscard]] vk::Queue transfer_queue() const { return m_transfer_queue; }
+
   void wait_idle() const;
 
   vk::SurfaceCapabilitiesKHR surfaceCapabilities(const vk::SurfaceKHR& surface) const;

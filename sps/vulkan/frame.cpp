@@ -14,6 +14,8 @@ Frame::Frame(Device& device, const vk::Image& image, const vk::Format& format)
   , m_image(image)
 {
   vk::ImageViewCreateInfo createInfo = {};
+  // TODO: Create image views either here or inside swapchain
+
   m_imageAvailable = std::make_unique<Semaphore>(m_device, "Swapchain image available");
   m_renderFinished = std::make_unique<Semaphore>(m_device, "Render finished");
   m_inFlight = std::make_unique<Fence>(m_device, "In flight", true);

@@ -24,6 +24,7 @@ struct framebufferInput
         \param frames the vector to be populated with the created framebuffers
         \param debug whether the system is running in debug mode.
 */
-void make_framebuffers(framebufferInput inputChunk, const Swapchain& swapchaine, bool debug);
+std::vector<vk::Framebuffer> make_framebuffers(
+  framebufferInput inputChunk, const Swapchain& swapchaine, bool debug);
 
 }

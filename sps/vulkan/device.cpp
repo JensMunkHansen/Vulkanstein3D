@@ -568,9 +568,15 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   }
 #endif
 
-  spdlog::trace("transfer queue family index: {}", m_transfer_queue_family_index);
-  spdlog::trace("graphics queue family index: {}", m_graphics_queue_family_index);
-  spdlog::trace("present queue family index: {}", m_present_queue_family_index);
+  spdlog::trace("Queue family indices:");
+  spdlog::trace("   - Graphics: {}", m_graphics_queue_family_index);
+  spdlog::trace("   - Present: {}", m_present_queue_family_index);
+  spdlog::trace("   - Transfer: {}", m_transfer_queue_family_index);
+
+  // Setup the queues for presentation and graphics.
+  // Since we only have one queue per queue family, we acquire index 0.
+  m_present_queue = m_device.getQueue(m_present_queue_family_index, 0);
+  m_graphics_queue = m_device.getQueue(m_graphics_queue_family_index, 0);
 }
 
 Device::~Device()
