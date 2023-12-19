@@ -1,49 +1,20 @@
 #pragma once
 
+#include <sps/vulkan/config.h>
+
 #include <spdlog/spdlog.h>
-#include <vulkan/vulkan.hpp>
 
 #include <sps/vulkan/device.h>
+
+#include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_core.h>
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_structs.hpp>
 
+#include <sps/vulkan/swapchain_simple.h>
+
 namespace sps::vulkan
 {
-
-/**
-        Holds properties of the swapchain
-        capabilities: no. of images and supported sizes
-        formats: eg. supported pixel formats
-        present modes: available presentation modes (eg. double buffer, fifo, mailbox)
-*/
-struct SwapChainSupportDetails
-{
-  vk::SurfaceCapabilitiesKHR capabilities;
-  std::vector<vk::SurfaceFormatKHR> formats;
-  std::vector<vk::PresentModeKHR> presentModes;
-};
-
-/**
-        Various data structures associated with the swapchain.
-*/
-struct SwapChainBundle
-{
-  vk::SwapchainKHR swapchain;
-  std::vector<vk::Image> images;
-  vk::Format format;
-  vk::Extent2D extent;
-};
-
-#if 0
-  for (vkUtil::SwapChainFrame& frame : swapchainFrames)
-  {
-    frame.destroy();
-  }
-  device.destroySwapchainKHR(swapchain);
-
-  device.destroyDescriptorPool(frameDescriptorPool);
-#endif
 
 class Device;
 class Semaphore;

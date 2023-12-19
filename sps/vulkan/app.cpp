@@ -162,11 +162,9 @@ Application::Application(int argc, char** argv)
     std::make_unique<Device>(*m_instance, m_surface->get(), use_distinct_data_transfer_queue,
       physical_device, required_extensions, required_features, optional_features);
 
-#if 1
-  // Create swapchain - not enabled
+  // Create swapchain
   m_swapchain = std::make_unique<Swapchain>(
     *m_device, m_surface->get(), m_window->width(), m_window->height(), m_vsync_enabled);
-#endif
 }
 
 void Application::load_toml_configuration_file(const std::string& file_name)

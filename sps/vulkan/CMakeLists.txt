@@ -13,6 +13,7 @@ add_library(${TARGET_NAME}
   instance.cpp
   representation.cpp
   device.cpp
+  device_simple.cpp
   renderer.cpp
   fence.cpp
   frame.cpp
@@ -20,6 +21,7 @@ add_library(${TARGET_NAME}
   semaphore.cpp
   exception.cpp
   swapchain.cpp
+  swapchain_simple.cpp
   windowsurface.cpp
   ../tools/cla_parser.cpp
   )

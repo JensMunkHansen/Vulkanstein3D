@@ -14,19 +14,6 @@
 namespace sps::vulkan
 {
 
-struct QueueFamilyIndices
-{
-  std::optional<uint32_t> graphicsFamily;
-  std::optional<uint32_t> presentFamily;
-
-  /**
-     \returns whether all of the Queue family indices have been set.
-  */
-  bool isComplete() { return graphicsFamily.has_value() && presentFamily.has_value(); }
-};
-
-QueueFamilyIndices findQueueFamilies(vk::PhysicalDevice device, vk::SurfaceKHR surface);
-
 class Instance;
 
 struct DeviceInfo
