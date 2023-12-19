@@ -25,14 +25,13 @@ private:
   Device& m_device;
 
   // FIXME;
-  SwapChainBundle m_swapchain2; //{ VK_NULL_HANDLE };
   VkSurfaceKHR m_surface{ VK_NULL_HANDLE };
   std::optional<vk::SurfaceFormatKHR> m_surface_format{};
+  // images
   std::vector<vk::Image> m_imgs;
+  // image views
   std::vector<vk::ImageView> m_img_views;
 
-  // images
-  // image views
   vk::Extent2D m_extent{};
   vk::SwapchainKHR m_swapchain{ nullptr };
 

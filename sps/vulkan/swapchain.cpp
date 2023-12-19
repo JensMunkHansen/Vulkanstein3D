@@ -363,12 +363,7 @@ Swapchain::Swapchain(Device& device, const VkSurfaceKHR surface, const std::uint
   , m_surface(surface)
   , m_vsync_enabled(vsync_enabled)
 {
-#ifdef NEW_SWAPCHAIN
   setup_swapchain(width, height, vsync_enabled);
-#else
-  m_swapchain2 =
-    create_swapchain(m_device.device(), m_device.physicalDevice(), surface, width, height, false);
-#endif
 }
 
 Swapchain::Swapchain(Swapchain&& other) noexcept
@@ -387,11 +382,7 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
 
 Swapchain::~Swapchain()
 {
-#ifdef NEW_SWAPCHAIN
   m_device.device().destroySwapchainKHR(m_swapchain);
-#else
-  m_device.device().destroySwapchainKHR(m_swapchain2.swapchain);
-#endif
   for (auto const img_view : m_img_views)
   {
     m_device.device().destroyImageView(img_view);
