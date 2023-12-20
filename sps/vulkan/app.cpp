@@ -25,6 +25,24 @@
 
 #include <iostream>
 
+namespace
+{
+inline constexpr auto hash_djb2a(const std::string_view sv)
+{
+  unsigned long hash{ 5381 };
+  for (unsigned char c : sv)
+  {
+    hash = ((hash << 5) + hash) ^ c;
+  }
+  return hash;
+}
+
+inline constexpr auto operator"" _sh(const char* str, size_t len)
+{
+  return hash_djb2a(std::string_view{ str, len });
+}
+}
+
 namespace sps::vulkan
 {
 
@@ -229,6 +247,24 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   using WindowMode = sps::vulkan::Window::Mode;
   const auto& wmodestr =
     toml::find<std::string>(renderer_configuration, "application", "window", "mode");
+
+#if 1
+  switch (hash_djb2a(wmodestr))
+  {
+    case "windowed"_sh:
+      m_window_mode = WindowMode::WINDOWED;
+      break;
+    case "windowed_fullscreen"_sh:
+      m_window_mode = WindowMode::WINDOWED_FULLSCREEN;
+      break;
+    case "fullscreen"_sh:
+      m_window_mode = WindowMode::FULLSCREEN;
+      break;
+    default:
+      spdlog::warn("Invalid application window mode: {}", wmodestr);
+      m_window_mode = WindowMode::WINDOWED;
+  }
+#else
   if (wmodestr == "windowed")
   {
     m_window_mode = WindowMode::WINDOWED;
@@ -246,6 +282,7 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     spdlog::warn("Invalid application window mode: {}", wmodestr);
     m_window_mode = WindowMode::WINDOWED;
   }
+#endif
 
   m_window_width = toml::find<int>(renderer_configuration, "application", "window", "width");
   m_window_height = toml::find<int>(renderer_configuration, "application", "window", "height");

@@ -56,3 +56,5 @@ add_subdirectory(debugMessenger)
 add_subdirectory(sps)
 
 add_subdirectory(vulk3D)
+
+add_subdirectory(helloTriangle)

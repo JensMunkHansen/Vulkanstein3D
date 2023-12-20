@@ -6,16 +6,16 @@ title = "vulkan-renderer-configuration"
 #TODO: Declare further TOML configuration files here?
 
 [application]
-name = "Inexor-Application"
+name = "Vulkan Triangle"
 
 [application.engine]
-name = "Inexor-Engine"
+name = "Vulkanstein3D"
 
 [application.window]
 mode = "windowed"
 width = 1280
 height = 720
-name = "Inexor-Vulkan-Renderer"
+name = "Vulkan Triangle"
 
 [shaders]
 [shaders.vertex]
