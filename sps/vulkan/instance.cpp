@@ -8,16 +8,21 @@
 #include <utility>
 #include <vulkan/vulkan_structs.hpp>
 
-VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-  VkDebugUtilsMessageTypeFlagsEXT messageType,
-  const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
+extern "C"
 {
-  spdlog::trace("Validation Layer: {}", pCallbackData->pMessage);
-  return VK_FALSE;
+  VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
+  {
+    spdlog::trace("Validation Layer: {}", pCallbackData->pMessage);
+    return VK_FALSE;
+  }
 }
 
 namespace sps::vulkan
 {
+
 Instance::Instance(Instance&& other) noexcept
 {
   m_instance = std::exchange(other.m_instance, nullptr);
@@ -110,7 +115,12 @@ Instance::Instance(const std::string& application_name, const std::string& engin
 
   spdlog::trace("Initializing Vulkan metaloader");
 
-  // Vulkan defined macro storage for dispatch loader
+  uint32_t version{ 0 };
+  vkEnumerateInstanceVersion(&version);
+
+  spdlog::trace("System can support vulkan Variant: {}, Major: {}, Minor: {}, Patch: {}",
+    VK_API_VERSION_VARIANT(version), VK_API_VERSION_MAJOR(version), VK_API_VERSION_MINOR(version),
+    VK_API_VERSION_PATCH(version));
 
   spdlog::trace("Initialising Vulkan instance");
   spdlog::trace("Application name: {}", application_name);

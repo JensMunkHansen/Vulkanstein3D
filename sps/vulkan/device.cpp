@@ -17,10 +17,8 @@
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_structs.hpp>
 
-namespace sps::vulkan
+namespace
 {
-constexpr float DEFAULT_QUEUE_PRIORITY = 1.0f;
-
 std::vector<VkBool32> get_device_features_as_vector(const vk::PhysicalDeviceFeatures& features)
 {
   std::vector<VkBool32> comparable_features(sizeof(vk::PhysicalDeviceFeatures) / sizeof(VkBool32));
@@ -32,24 +30,6 @@ std::string get_physical_device_name(const vk::PhysicalDevice physical_device)
 {
   vk::PhysicalDeviceProperties properties = physical_device.getProperties();
   return properties.deviceName;
-}
-
-bool Device::is_presentation_supported(
-  const vk::SurfaceKHR& surface, const std::uint32_t queue_family_index) const
-{
-  // Default to true in this case where a surface is not passed (and therefore presentation isn't
-  // cared about)
-
-  VkBool32 supported = VK_TRUE;
-  {
-    if (const auto result =
-          vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, 0, surface, &supported);
-        result != VK_SUCCESS)
-    {
-      throw VulkanException("Error: vkGetPhysicalDeviceSurfaceSupportKHR failed!", result);
-    }
-    return supported == VK_TRUE;
-  }
 }
 
 /// Check if a device extension is supported by a physical device
@@ -64,6 +44,11 @@ bool is_extension_supported(
            [&](const vk::ExtensionProperties extension)
            { return extension.extensionName == extension_name; }) != extensions.end();
 }
+}
+
+namespace sps::vulkan
+{
+constexpr float DEFAULT_QUEUE_PRIORITY = 1.0f;
 
 /// A function for rating physical devices by type
 /// @param info The physical device info
@@ -112,11 +97,7 @@ DeviceInfo build_device_info(const vk::PhysicalDevice physical_device, const vk:
     }
   }
 
-  // vk::DispatchLoaderDynamic(inst.instance(), vkGetInstanceProcAddr);
-
   const auto extensions = physical_device.enumerateDeviceExtensionProperties();
-
-  // physical_device.enumerateDeviceExtensionProperties();
 
   const bool is_swapchain_supported =
     is_extension_supported(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
@@ -131,111 +112,6 @@ DeviceInfo build_device_info(const vk::PhysicalDevice physical_device, const vk:
     .presentation_supported = presentation_supported == VK_TRUE,
     .swapchain_supported = is_swapchain_supported,
   };
-}
-
-void log_device_properties(const vk::PhysicalDevice& device)
-{
-  /*
-  * void vkGetPhysicalDeviceProperties(
-          VkPhysicalDevice                            physicalDevice,
-          VkPhysicalDeviceProperties*                 pProperties);
-  */
-
-  vk::PhysicalDeviceProperties properties = device.getProperties();
-
-  /*
-  * typedef struct VkPhysicalDeviceProperties {
-          uint32_t                            apiVersion;
-          uint32_t                            driverVersion;
-          uint32_t                            vendorID;
-          uint32_t                            deviceID;
-          VkPhysicalDeviceType                deviceType;
-          char                                deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE];
-          uint8_t                             pipelineCacheUUID[VK_UUID_SIZE];
-          VkPhysicalDeviceLimits              limits;
-          VkPhysicalDeviceSparseProperties    sparseProperties;
-          } VkPhysicalDeviceProperties;
-  */
-
-  spdlog::trace("Device name: {}", properties.deviceName);
-
-  spdlog::trace("Device type: ");
-  switch (properties.deviceType)
-  {
-
-    case (vk::PhysicalDeviceType::eCpu):
-      spdlog::trace("CPU");
-      break;
-
-    case (vk::PhysicalDeviceType::eDiscreteGpu):
-      spdlog::trace("Discrete GPU");
-      break;
-
-    case (vk::PhysicalDeviceType::eIntegratedGpu):
-      spdlog::trace("Integrated GPU");
-      break;
-
-    case (vk::PhysicalDeviceType::eVirtualGpu):
-      spdlog::trace("Virtual GPU");
-      break;
-
-    default:
-      spdlog::trace("Other");
-  }
-}
-
-bool checkDeviceExtensionSupport(
-  const vk::PhysicalDevice& device, const std::vector<const char*>& requestedExtensions)
-{
-  /*
-   * Check if a given physical device can satisfy a list of requested device
-   * extensions.
-   */
-
-  std::set<std::string> requiredExtensions(requestedExtensions.begin(), requestedExtensions.end());
-
-  spdlog::trace("Device can support extensions:");
-
-  for (vk::ExtensionProperties& extension : device.enumerateDeviceExtensionProperties())
-  {
-
-    spdlog::trace("\t\"{}\"", extension.extensionName);
-
-    // remove this from the list of required extensions (set checks for equality automatically)
-    requiredExtensions.erase(extension.extensionName);
-  }
-
-  // if the set is empty then all requirements have been satisfied
-  return requiredExtensions.empty();
-}
-
-bool is_device_suitable(const vk::PhysicalDevice& device)
-{
-  spdlog::trace("Checking if device is suitable");
-
-  // TODO: Accept requirements from outside
-  const std::vector<const char*> requestedExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-
-  spdlog::trace("We are requesting device extensions:");
-
-  for (const char* extension : requestedExtensions)
-  {
-    spdlog::trace("\t\"{}\"", extension);
-
-    if (bool extensionsSupported = checkDeviceExtensionSupport(device, requestedExtensions))
-    {
-
-      spdlog::trace("Device can support the requested extensions!");
-    }
-    else
-    {
-      spdlog::trace("Device can't support the requested extensions!");
-
-      return false;
-    }
-    return true;
-  }
-  return false;
 }
 
 bool is_device_suitable(const DeviceInfo& info, const vk::PhysicalDeviceFeatures& required_features,
@@ -274,44 +150,6 @@ bool is_device_suitable(const DeviceInfo& info, const vk::PhysicalDeviceFeatures
   return info.presentation_supported && info.swapchain_supported;
 }
 
-vk::PhysicalDevice choose_physical_device(const vk::Instance& instance)
-{
-  /*
-   * Choose a suitable physical device from a list of candidates.
-   * Note: Physical devices are neither created nor destroyed, they exist
-   * independently to the program.
-   */
-
-  spdlog::trace("Choosing Physical Device");
-
-  /*
-  * ResultValueType<std::vector<PhysicalDevice, PhysicalDeviceAllocator>>::type
-          Instance::enumeratePhysicalDevices( Dispatch const & d )
-
-    std::vector<vk::PhysicalDevice> instance.enumeratePhysicalDevices( Dispatch const & d =
-  static/default )
-  */
-  std::vector<vk::PhysicalDevice> availableDevices = instance.enumeratePhysicalDevices();
-
-  spdlog::trace("There are {} physical devices available on this system", availableDevices.size());
-
-  /*
-   * check if a suitable device can be found
-   */
-  for (vk::PhysicalDevice device : availableDevices)
-  {
-    if (spdlog::get_level() == spdlog::level::trace)
-    {
-      log_device_properties(device);
-    }
-    if (is_device_suitable(device))
-    {
-      return device;
-    }
-  }
-  return nullptr;
-}
-
 bool compare_physical_devices(const vk::PhysicalDeviceFeatures& required_features,
   const std::span<const char*> required_extensions, const DeviceInfo& lhs, const DeviceInfo& rhs)
 {
@@ -333,6 +171,24 @@ bool compare_physical_devices(const vk::PhysicalDeviceFeatures& required_feature
   }
   // Device types equal, compare total amount of DEVICE_LOCAL memory
   return lhs.total_device_local >= rhs.total_device_local;
+}
+
+bool Device::is_presentation_supported(
+  const vk::SurfaceKHR& surface, const std::uint32_t queue_family_index) const
+{
+  // Default to true in this case where a surface is not passed (and therefore presentation isn't
+  // cared about)
+
+  VkBool32 supported = VK_TRUE;
+  {
+    if (const auto result =
+          vkGetPhysicalDeviceSurfaceSupportKHR(m_physical_device, 0, surface, &supported);
+        result != VK_SUCCESS)
+    {
+      throw VulkanException("Error: vkGetPhysicalDeviceSurfaceSupportKHR failed!", result);
+    }
+    return supported == VK_TRUE;
+  }
 }
 
 vk::PhysicalDevice Device::pick_best_physical_device( //
@@ -412,8 +268,10 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   {
     spdlog::warn("The application is forced not to use a distinct data transfer queue!");
   }
+
 #if 0
-  // vk::PhysicalDevice physicalDevice = choose_physical_device(inst.instance());
+  // Old stuff
+  vk::PhysicalDevice physicalDevice = choose_physical_device(inst.instance());
   m_device = create_logical_device(physical_device, surface);
 #else
   // Check if there is one queue family which can be used for both graphics and presentation

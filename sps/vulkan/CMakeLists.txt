@@ -23,6 +23,7 @@ add_library(${TARGET_NAME}
   exception.cpp
   swapchain.cpp
   swapchain_simple.cpp
+  device_old.cpp
   pipeline.cpp
   windowsurface.cpp
   commands.cpp

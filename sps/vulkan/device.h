@@ -114,6 +114,7 @@ private:
   vk::Queue m_transfer_queue{ VK_NULL_HANDLE };
 
 public:
+  // Find other way to expose to swapchain
   std::uint32_t m_present_queue_family_index{ 0 };
   std::uint32_t m_graphics_queue_family_index{ 0 };
   std::uint32_t m_transfer_queue_family_index{ 0 };
@@ -125,11 +126,13 @@ private:
   vk::DispatchLoaderDynamic m_dldi;
 
   // Debug markers
-  PFN_vkDebugMarkerSetObjectTagEXT m_vk_debug_marker_set_object_tag{ nullptr };
   PFN_vkDebugMarkerSetObjectNameEXT m_vk_debug_marker_set_object_name{ nullptr };
+#if 0
+  PFN_vkDebugMarkerSetObjectTagEXT m_vk_debug_marker_set_object_tag{ nullptr };
   PFN_vkCmdDebugMarkerBeginEXT m_vk_cmd_debug_marker_begin{ nullptr };
   PFN_vkCmdDebugMarkerEndEXT m_vk_cmd_debug_marker_end{ nullptr };
   PFN_vkCmdDebugMarkerInsertEXT m_vk_cmd_debug_marker_insert{ nullptr };
   PFN_vkSetDebugUtilsObjectNameEXT m_vk_set_debug_utils_object_name{ nullptr };
+#endif
 };
 }

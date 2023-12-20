@@ -11,8 +11,6 @@
 #include <vulkan/vulkan_structs.hpp>
 #include <vulkan/vulkan_to_string.hpp>
 
-// #define USE_SIMPLE_SWAPCHAIN 1
-
 namespace sps::vulkan
 {
 
@@ -85,7 +83,7 @@ vk::PresentModeKHR Swapchain::choose_present_mode(
     }
   }
   // chosenPresentMode = vk::PresentModeKHR::eImmediate;
-  spdlog::trace("Chosen present mode: {}", vk::to_string(chosenPresentMode));
+  spdlog::trace("Selected present mode: {}", vk::to_string(chosenPresentMode));
   return chosenPresentMode;
 }
 
@@ -190,11 +188,6 @@ void Swapchain::setup_swapchain(
     spdlog::trace("\tmaximum image count: {}", caps.maxImageCount);
 
     spdlog::trace("\tcurrent extent: ");
-    /*typedef struct VkExtent2D {
-            uint32_t    width;
-            uint32_t    height;
-    } VkExtent2D;
-    */
     spdlog::trace("\t\twidth: {}", caps.currentExtent.width);
     spdlog::trace("\t\theight: {}", caps.currentExtent.height);
 
@@ -244,12 +237,6 @@ void Swapchain::setup_swapchain(
   spdlog::trace("supported surface format");
   for (vk::SurfaceFormatKHR supportedFormat : formats)
   {
-    /*
-     * typedef struct VkSurfaceFormatKHR {
-     VkFormat           format;
-     VkColorSpaceKHR    colorSpace;
-     } VkSurfaceFormatKHR;
-    */
     spdlog::trace("\tpixel format: {}\tcolor space: {}", vk::to_string(supportedFormat.format),
       vk::to_string(supportedFormat.colorSpace));
   }
@@ -395,13 +382,7 @@ Swapchain::Swapchain(Device& device, const VkSurfaceKHR surface, const std::uint
   , m_surface(surface)
   , m_vsync_enabled(vsync_enabled)
 {
-#ifdef USE_SIMPLE_SWAPCHAIN
-  SwapChainBundle bundle =
-    create_swapchain(m_device.device(), m_device.physicalDevice(), surface, width, height, true);
-  m_swapchain = bundle.swapchain;
-#else
   setup_swapchain(width, height, vsync_enabled);
-#endif
 }
 
 Swapchain::Swapchain(Swapchain&& other) noexcept
@@ -413,7 +394,7 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
   m_imgs = std::move(other.m_imgs);
   m_img_views = std::move(other.m_img_views);
   m_extent = other.m_extent;
-  // m_img_available = std::exchange(other.m_img_available, nullptr);
+  // Consider adding frame with sets of semaphores
   m_vsync_enabled = other.m_vsync_enabled;
 }
 

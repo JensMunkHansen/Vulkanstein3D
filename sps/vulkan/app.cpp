@@ -1,10 +1,16 @@
+#include <sps/vulkan/config.h>
+
 #include <memory>
+#include <spdlog/common.h>
 #include <sps/vulkan/config.h>
 
 #include <sps/tools/cla_parser.hpp>
 #include <sps/vulkan/app.h>
 #include <sps/vulkan/meta.hpp>
 #include <sps/vulkan/windowsurface.h>
+
+// TODO: Avoid this
+#include <sps/vulkan/device_old.h>
 
 // Dirty-hacks
 #include <sps/vulkan/commands.h>
@@ -147,6 +153,20 @@ Application::Application(int argc, char** argv)
   }
 
   const auto physical_devices = m_instance.get()->instance().enumeratePhysicalDevices();
+
+  if (spdlog::get_level() == spdlog::level::trace)
+  {
+    spdlog::trace(
+      "There are {} physical devices available on this system", physical_devices.size());
+    /*
+     * check if a suitable device can be found
+     */
+    for (vk::PhysicalDevice device : physical_devices)
+    {
+      sps::vulkan::log_device_properties(device);
+    }
+  }
+
   if (preferred_graphics_card && *preferred_graphics_card >= physical_devices.size())
   {
     spdlog::critical("GPU index {} out of range!", *preferred_graphics_card);
