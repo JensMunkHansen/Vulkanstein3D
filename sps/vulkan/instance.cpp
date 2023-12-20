@@ -8,6 +8,8 @@
 #include <utility>
 #include <vulkan/vulkan_structs.hpp>
 
+#include <iostream>
+
 VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
   VkDebugUtilsMessageTypeFlagsEXT messageType,
   const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
@@ -27,75 +29,29 @@ Instance::Instance(Instance&& other) noexcept
 
 Instance::~Instance()
 {
+#ifdef SPS_DEBUG
   m_instance.destroy(m_debugMessenger, nullptr, m_dldi);
+#endif
   m_instance.destroy();
 }
 
 bool Instance::is_layer_supported(const std::string& layer_name)
 {
-  std::uint32_t instance_layer_count = 0;
-
-  if (const VkResult result = vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
-      result != VK_SUCCESS)
-  {
-    throw VulkanException("Error: vkEnumerateInstanceLayerProperties failed!", result);
-  }
-
-  if (instance_layer_count == 0)
-  {
-    // This is not an error. Some platforms simply don't have any instance layers.
-    spdlog::info("No Vulkan instance layers available!");
-    return false;
-  }
-  std::vector<VkLayerProperties> instance_layers(instance_layer_count);
-
-  // Store all available instance layers.
-  if (const VkResult result =
-        vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layers.data());
-      result != VK_SUCCESS)
-  {
-    throw VulkanException("Error: vkEnumerateInstanceLayerProperties failed!", result);
-  }
-
-  // Search for the requested instance layer.
-  return std::find_if(instance_layers.begin(), instance_layers.end(),
-           [&](const VkLayerProperties instance_layer)
-           { return instance_layer.layerName == layer_name; }) != instance_layers.end();
+  std::vector<vk::LayerProperties> supportedLayers = vk::enumerateInstanceLayerProperties();
+  return std::find_if(supportedLayers.begin(), supportedLayers.end(),
+           [&](const vk::LayerProperties instance_layer)
+           { return instance_layer.layerName == layer_name; }) != supportedLayers.end();
 }
 
 bool Instance::is_extension_supported(const std::string& extension_name)
 {
-  std::uint32_t instance_extension_count = 0;
+  std::vector<vk::ExtensionProperties> supportedExtensions =
+    vk::enumerateInstanceExtensionProperties();
 
-  if (const VkResult result =
-        vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, nullptr);
-      result != VK_SUCCESS)
-  {
-    throw VulkanException("Error: vkEnumerateInstanceExtensionProperties failed!", result);
-  }
-
-  if (instance_extension_count == 0)
-  {
-    // This is not an error. Some platforms simply don't have any instance extensions.
-    spdlog::info("No Vulkan instance extensions available!");
-    return false;
-  }
-
-  std::vector<VkExtensionProperties> instance_extensions(instance_extension_count);
-
-  // Store all available instance extensions.
-  if (const VkResult result = vkEnumerateInstanceExtensionProperties(
-        nullptr, &instance_extension_count, instance_extensions.data());
-      result != VK_SUCCESS)
-  {
-    throw VulkanException("Error: vkEnumerateInstanceExtensionProperties failed!", result);
-  }
-
-  // Search for the requested instance extension.
-  return std::find_if(instance_extensions.begin(), instance_extensions.end(),
-           [&](const VkExtensionProperties instance_extension) {
+  return std::find_if(supportedExtensions.begin(), supportedExtensions.end(),
+           [&](const vk::ExtensionProperties instance_extension) {
              return instance_extension.extensionName == extension_name;
-           }) != instance_extensions.end();
+           }) != supportedExtensions.end();
 }
 
 Instance::Instance(const std::string& application_name, const std::string& engine_name,
@@ -270,7 +226,7 @@ Instance::Instance(const std::string& application_name, const std::string& engin
     }
     else
     {
-#ifdef SPS_DEBUG
+#ifndef SPS_DEBUG
       if (std::string(current_layer) == VK_EXT_DEBUG_MARKER_EXTENSION_NAME)
       {
         spdlog::error("You can't use command line argument -renderdoc in release mode");
@@ -281,11 +237,15 @@ Instance::Instance(const std::string& application_name, const std::string& engin
     }
   }
 
+  // Crash here
   vk::InstanceCreateInfo instanceCreateInfo;
   instanceCreateInfo.setFlags(vk::InstanceCreateFlags());
   instanceCreateInfo.setPApplicationInfo(&applicationInfo);
   instanceCreateInfo.setPEnabledExtensionNames(enabled_instance_extensions);
   instanceCreateInfo.setPEnabledLayerNames(validationLayers);
+  instanceCreateInfo.setEnabledLayerCount(static_cast<std::uint32_t>(validationLayers.size()));
+  instanceCreateInfo.setEnabledExtensionCount(
+    static_cast<std::uint32_t>(enabled_instance_extensions.size()));
 
   if (const vk::Result result = vk::createInstance(&instanceCreateInfo, nullptr, &m_instance);
       result != vk::Result::eSuccess)
@@ -294,6 +254,8 @@ Instance::Instance(const std::string& application_name, const std::string& engin
     throw VulkanException("Failed to create Vulkan instance.", static_cast<VkResult>(result));
   }
 
+#ifdef SPS_DEBUG
+  // We cannot use this in release mode
   vk::DebugUtilsMessengerCreateInfoEXT createInfo =
     vk::DebugUtilsMessengerCreateInfoEXT(vk::DebugUtilsMessengerCreateFlagsEXT(),
       vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
@@ -307,6 +269,7 @@ Instance::Instance(const std::string& application_name, const std::string& engin
   m_dldi = vk::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
 
   m_debugMessenger = m_instance.createDebugUtilsMessengerEXT(createInfo, nullptr, m_dldi);
+#endif
 }
 
 Instance::Instance(const std::string& application_name, const std::string& engine_name,
