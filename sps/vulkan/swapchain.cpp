@@ -2,6 +2,7 @@
 
 #include <spdlog/common.h>
 #include <spdlog/spdlog.h>
+
 #include <sps/vulkan/device.h>
 #include <sps/vulkan/exception.h>
 #include <sps/vulkan/representation.h>

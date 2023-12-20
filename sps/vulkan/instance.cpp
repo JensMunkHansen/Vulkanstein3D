@@ -8,16 +8,12 @@
 #include <utility>
 #include <vulkan/vulkan_structs.hpp>
 
-extern "C"
+VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+  VkDebugUtilsMessageTypeFlagsEXT messageType,
+  const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
 {
-  VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData)
-  {
-    spdlog::trace("Validation Layer: {}", pCallbackData->pMessage);
-    return VK_FALSE;
-  }
+  spdlog::trace("Validation Layer: {}", pCallbackData->pMessage);
+  return VK_FALSE;
 }
 
 namespace sps::vulkan
@@ -212,6 +208,7 @@ Instance::Instance(const std::string& application_name, const std::string& engin
   // We are not checking for duplicated entries but this is no problem.
   for (const auto& instance_extension : instance_extension_wishlist)
   {
+    // CRASH: Use the C API
     if (is_extension_supported(instance_extension))
     {
       spdlog::trace("   - {} ", instance_extension);

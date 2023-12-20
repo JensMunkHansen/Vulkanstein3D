@@ -77,8 +77,8 @@ Application::Application(int argc, char** argv)
 
   spdlog::trace("Creating Vulkan instance");
 
-  m_window_width = 640;
-  m_window_height = 480;
+  m_window_width = 800;
+  m_window_height = 600;
 
   const bool resizeable = false;
   m_window = std::make_unique<sps::vulkan::Window>(
