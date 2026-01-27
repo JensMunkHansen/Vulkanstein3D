@@ -290,7 +290,7 @@ Instance::Instance()
         vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
       debugCallback, nullptr);
 
-  m_dldi = vk::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
+  m_dldi = vk::detail::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
 
   m_debugUtilsMessenger = m_instance.createDebugUtilsMessengerEXT(createInfo, nullptr, m_dldi);
 }

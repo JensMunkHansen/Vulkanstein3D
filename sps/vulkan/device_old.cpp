@@ -25,10 +25,10 @@ bool checkDeviceExtensionSupport(
   for (vk::ExtensionProperties& extension : device.enumerateDeviceExtensionProperties())
   {
 
-    spdlog::trace("\t\"{}\"", extension.extensionName);
+    spdlog::trace("\t\"{}\"", extension.extensionName.data());
 
     // remove this from the list of required extensions (set checks for equality automatically)
-    requiredExtensions.erase(extension.extensionName);
+    requiredExtensions.erase(extension.extensionName.data());
   }
 
   // if the set is empty then all requirements have been satisfied
@@ -126,7 +126,7 @@ void log_device_properties(const vk::PhysicalDevice& device)
           } VkPhysicalDeviceProperties;
   */
 
-  spdlog::trace("\tDevice name: {}", properties.deviceName);
+  spdlog::trace("\tDevice name: {}", properties.deviceName.data());
 
   switch (properties.deviceType)
   {

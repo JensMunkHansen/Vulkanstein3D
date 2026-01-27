@@ -29,7 +29,7 @@ std::vector<VkBool32> get_device_features_as_vector(const vk::PhysicalDeviceFeat
 std::string get_physical_device_name(const vk::PhysicalDevice physical_device)
 {
   vk::PhysicalDeviceProperties properties = physical_device.getProperties();
-  return properties.deviceName;
+  return properties.deviceName.data();
 }
 
 /// Check if a device extension is supported by a physical device
@@ -42,7 +42,7 @@ bool is_extension_supported(
 {
   return std::find_if(extensions.begin(), extensions.end(),
            [&](const vk::ExtensionProperties extension)
-           { return extension.extensionName == extension_name; }) != extensions.end();
+           { return extension_name == extension.extensionName.data(); }) != extensions.end();
 }
 }
 
@@ -103,7 +103,7 @@ DeviceInfo build_device_info(const vk::PhysicalDevice physical_device, const vk:
     is_extension_supported(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
   return DeviceInfo{
-    .name = properties.deviceName,
+    .name = properties.deviceName.data(),
     .physical_device = physical_device,
     .type = properties.deviceType,
     .total_device_local = total_device_local,
@@ -413,7 +413,7 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
         return std::string(extension) == std::string(VK_EXT_DEBUG_MARKER_EXTENSION_NAME);
       }) != required_extensions.end();
 
-  m_dldi = vk::DispatchLoaderDynamic(inst.instance(), vkGetInstanceProcAddr);
+  m_dldi = vk::detail::DispatchLoaderDynamic(inst.instance(), vkGetInstanceProcAddr);
 
 #ifdef SPS_DEBUG
   spdlog::trace("debug markers enabled {}", enable_debug_markers);

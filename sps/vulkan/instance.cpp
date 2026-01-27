@@ -40,7 +40,7 @@ bool Instance::is_layer_supported(const std::string& layer_name)
   std::vector<vk::LayerProperties> supportedLayers = vk::enumerateInstanceLayerProperties();
   return std::find_if(supportedLayers.begin(), supportedLayers.end(),
            [&](const vk::LayerProperties instance_layer)
-           { return instance_layer.layerName == layer_name; }) != supportedLayers.end();
+           { return layer_name == instance_layer.layerName.data(); }) != supportedLayers.end();
 }
 
 bool Instance::is_extension_supported(const std::string& extension_name)
@@ -50,7 +50,7 @@ bool Instance::is_extension_supported(const std::string& extension_name)
 
   return std::find_if(supportedExtensions.begin(), supportedExtensions.end(),
            [&](const vk::ExtensionProperties instance_extension) {
-             return instance_extension.extensionName == extension_name;
+             return extension_name == instance_extension.extensionName.data();
            }) != supportedExtensions.end();
 }
 
@@ -161,11 +161,21 @@ Instance::Instance(const std::string& application_name, const std::string& engin
 
   spdlog::trace("List of enabled instance extensions:");
 
+  // Enumerate extensions once for efficiency
+  std::vector<vk::ExtensionProperties> available_extensions =
+    vk::enumerateInstanceExtensionProperties();
+
+  auto is_ext_available = [&](const std::string& ext_name) {
+    return std::find_if(available_extensions.begin(), available_extensions.end(),
+             [&](const vk::ExtensionProperties& ext) {
+               return ext_name == ext.extensionName.data();
+             }) != available_extensions.end();
+  };
+
   // We are not checking for duplicated entries but this is no problem.
   for (const auto& instance_extension : instance_extension_wishlist)
   {
-    // CRASH: Use the C API
-    if (is_extension_supported(instance_extension))
+    if (is_ext_available(instance_extension))
     {
       spdlog::trace("   - {} ", instance_extension);
       enabled_instance_extensions.push_back(instance_extension);
@@ -215,11 +225,21 @@ Instance::Instance(const std::string& application_name, const std::string& engin
 
   spdlog::trace("List of enabled instance layers:");
 
+  // Enumerate layers once for efficiency
+  std::vector<vk::LayerProperties> available_layers = vk::enumerateInstanceLayerProperties();
+
+  auto is_layer_available = [&](const std::string& layer_name) {
+    return std::find_if(available_layers.begin(), available_layers.end(),
+             [&](const vk::LayerProperties& layer) {
+               return layer_name == layer.layerName.data();
+             }) != available_layers.end();
+  };
+
   // We have to check which instance layers of our wishlist are available on the current system!
   // We are not checking for duplicated entries but this is no problem.
   for (const auto& current_layer : instance_layers_wishlist)
   {
-    if (is_layer_supported(current_layer))
+    if (is_layer_available(current_layer))
     {
       spdlog::trace("   - {}", current_layer);
       enabled_instance_layers.push_back(current_layer);
@@ -266,7 +286,7 @@ Instance::Instance(const std::string& application_name, const std::string& engin
         vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
       debugCallback, nullptr);
 
-  m_dldi = vk::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
+  m_dldi = vk::detail::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
 
   m_debugMessenger = m_instance.createDebugUtilsMessengerEXT(createInfo, nullptr, m_dldi);
 #endif

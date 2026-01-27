@@ -9,7 +9,7 @@ namespace sps::vulkan
 class Instance
 {
 private:
-  vk::DispatchLoaderDynamic m_dldi;
+  vk::detail::DispatchLoaderDynamic m_dldi;
   vk::Instance m_instance{ VK_NULL_HANDLE };
   vk::DebugUtilsMessengerEXT m_debugMessenger{ nullptr };
   bool m_enable_validation_layers{ true };

@@ -116,7 +116,7 @@ bool supported(std::vector<const char*>& extensions, std::vector<const char*>& l
 namespace engine::core
 {
 
-vk::DynamicLoader Instance::dl;
+vk::detail::DynamicLoader Instance::dl;
 
 Instance::Instance()
 {

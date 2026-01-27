@@ -12,7 +12,7 @@ public:
   [[nodiscard]] const vk::Instance& getInstance() const { return m_instance; }
 
 private:
-  vk::DispatchLoaderDynamic m_dldi;
+  vk::detail::DispatchLoaderDynamic m_dldi;
   vk::Instance m_instance{ VK_NULL_HANDLE };
   vk::DebugUtilsMessengerEXT m_debugUtilsMessenger;
 };

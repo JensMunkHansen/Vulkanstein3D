@@ -10,9 +10,13 @@ std::vector<char> readFile(std::string filename, bool debug)
 
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
 
-  if (debug && !file.is_open())
+  if (!file.is_open())
   {
-    std::cout << "Failed to load \"" << filename << "\"" << std::endl;
+    if (debug)
+    {
+      std::cout << "Failed to load \"" << filename << "\"" << std::endl;
+    }
+    return {};
   }
 
   size_t filesize{ static_cast<size_t>(file.tellg()) };

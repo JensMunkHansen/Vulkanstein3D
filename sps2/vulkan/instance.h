@@ -15,7 +15,7 @@ private:
   VkInstance m_instance{ VK_NULL_HANDLE };
 
 #ifdef ENABLE_DEBUG_MESSENGER
-  vk::DispatchLoaderDynamic m_dldi;
+  vk::detail::DispatchLoaderDynamic m_dldi;
   vk::DebugUtilsMessengerEXT m_debugMessenger{ nullptr };
 #endif
 

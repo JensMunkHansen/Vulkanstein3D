@@ -58,6 +58,6 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBits
         \returns the created messenger
 */
 vk::DebugUtilsMessengerEXT make_debug_messenger(
-  vk::Instance instance, vk::DispatchLoaderDynamic& dldi);
+  vk::Instance instance, vk::detail::DispatchLoaderDynamic& dldi);
 
 }

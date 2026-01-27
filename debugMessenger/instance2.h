@@ -9,7 +9,7 @@ constexpr auto validationLayers = { "VK_LAYER_KHRONOS_validation" };
 class Instance
 {
 public:
-  static vk::DynamicLoader dl;
+  static vk::detail::DynamicLoader dl;
 
   Instance();
   ~Instance();

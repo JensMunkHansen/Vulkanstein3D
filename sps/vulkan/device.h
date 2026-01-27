@@ -123,7 +123,7 @@ private:
   mutable std::vector<std::unique_ptr<vk::CommandPool>> m_cmd_pools;
   mutable std::mutex m_mutex;
 
-  vk::DispatchLoaderDynamic m_dldi;
+  vk::detail::DispatchLoaderDynamic m_dldi;
 
   // Debug markers
   PFN_vkDebugMarkerSetObjectNameEXT m_vk_debug_marker_set_object_name{ nullptr };

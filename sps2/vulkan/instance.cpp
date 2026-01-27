@@ -42,7 +42,7 @@ bool Instance::is_layer_supported(const std::string& layer_name)
 {
 
 #ifdef SPS_VULKAN_DISPATCH_LOADER_DYNAMIC
-  vk::DynamicLoader dl;
+  vk::detail::DynamicLoader dl;
   PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties =
     dl.getProcAddress<PFN_vkEnumerateInstanceLayerProperties>("vkEnumerateInstanceLayerProperties");
 #endif
@@ -82,7 +82,7 @@ bool Instance::is_extension_supported(const std::string& extension_name)
   std::uint32_t instance_extension_count = 0;
 
 #ifdef SPS_VULKAN_DISPATCH_LOADER_DYNAMIC
-  vk::DynamicLoader dl;
+  vk::detail::DynamicLoader dl;
   PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties =
     dl.getProcAddress<PFN_vkEnumerateInstanceExtensionProperties>(
       "vkEnumerateInstanceExtensionProperties");
@@ -144,7 +144,7 @@ Instance::Instance(const std::string& application_name, const std::string& engin
     VK_API_VERSION_PATCH(REQUIRED_VK_API_VERSION));
 
 #ifdef SPS_VULKAN_DISPATCH_LOADER_DYNAMIC
-  vk::DynamicLoader dl;
+  vk::detail::DynamicLoader dl;
   PFN_vkEnumerateInstanceVersion vkEnumerateInstanceVersion =
     dl.getProcAddress<PFN_vkEnumerateInstanceVersion>("vkEnumerateInstanceVersion");
   PFN_vkCreateInstance vkCreateInstance =
@@ -330,7 +330,7 @@ Instance::Instance(const std::string& application_name, const std::string& engin
   // VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT*
   // pMessenger) instead
 
-  m_dldi = vk::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
+  m_dldi = vk::detail::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
   m_debugMessenger = sps::vulkan::make_debug_messenger(m_instance, m_dldi);
 
 #endif
@@ -361,7 +361,7 @@ Instance::~Instance()
 #endif
 
 #ifdef SPS_VULKAN_DISPATCH_LOADER_DYNAMIC
-  vk::DynamicLoader dl;
+  vk::detail::DynamicLoader dl;
   PFN_vkDestroyInstance vkDestroyInstance =
     dl.getProcAddress<PFN_vkDestroyInstance>("vkDestroyInstance");
 #endif
