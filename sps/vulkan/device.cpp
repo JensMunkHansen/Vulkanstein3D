@@ -97,6 +97,25 @@ DeviceInfo build_device_info(const vk::PhysicalDevice physical_device, const vk:
     }
   }
 
+  // Additional check: actually try to get surface formats to verify presentation works
+  // (workaround for NVIDIA PRIME driver bug where it claims support but fails)
+  if (presentation_supported)
+  {
+    try
+    {
+      auto formats = physical_device.getSurfaceFormatsKHR(surface);
+      if (formats.empty())
+      {
+        presentation_supported = VK_FALSE;
+      }
+    }
+    catch (...)
+    {
+      spdlog::trace("Device {} failed getSurfaceFormatsKHR check", properties.deviceName.data());
+      presentation_supported = VK_FALSE;
+    }
+  }
+
   const auto extensions = physical_device.enumerateDeviceExtensionProperties();
 
   const bool is_swapchain_supported =

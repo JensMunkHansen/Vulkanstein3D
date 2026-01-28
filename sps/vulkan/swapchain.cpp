@@ -256,7 +256,8 @@ void Swapchain::setup_swapchain(
   }
 
   static const std::vector<vk::PresentModeKHR> default_present_mode_priorities{
-    vk::PresentModeKHR::eMailbox, vk::PresentModeKHR::eFifoRelaxed, vk::PresentModeKHR::eFifo
+    vk::PresentModeKHR::eMailbox, vk::PresentModeKHR::eImmediate,
+    vk::PresentModeKHR::eFifoRelaxed, vk::PresentModeKHR::eFifo
   };
 
   const auto composite_alpha =

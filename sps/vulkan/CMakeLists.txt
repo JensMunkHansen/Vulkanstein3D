@@ -50,8 +50,7 @@ target_compile_options(
 )
 
 add_subdirectory(shaders)
-
-
+add_dependencies(engine vulkan-shaders)
 
 if (0)
 string(

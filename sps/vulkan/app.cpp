@@ -245,34 +245,6 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   const auto& configuration_title = toml::find<std::string>(renderer_configuration, "title");
   spdlog::trace("Title: {}", configuration_title);
 
-  // Set Vulkan driver ICD (try each in order until one is available)
-  if (renderer_configuration.contains("vulkan"))
-  {
-    auto driver_icds = toml::find_or<std::vector<std::string>>(
-      renderer_configuration, "vulkan", "driver_icds", std::vector<std::string>{});
-    for (const auto& icd_path : driver_icds)
-    {
-      std::ifstream icd_file(icd_path);
-      if (!icd_file.good())
-        continue;
-
-      // For NVIDIA, check if the device is actually available
-      if (icd_path.find("nvidia") != std::string::npos)
-      {
-        std::ifstream nvidia_dev("/dev/nvidia0");
-        if (!nvidia_dev.good())
-        {
-          spdlog::trace("Skipping NVIDIA ICD (device not available)");
-          continue;
-        }
-      }
-
-      spdlog::trace("Using Vulkan ICD: {}", icd_path);
-      setenv("VK_DRIVER_FILES", icd_path.c_str(), 1);
-      break;
-    }
-  }
-
   using WindowMode = sps::vulkan::Window::Mode;
   const auto& wmodestr =
     toml::find<std::string>(renderer_configuration, "application", "window", "mode");

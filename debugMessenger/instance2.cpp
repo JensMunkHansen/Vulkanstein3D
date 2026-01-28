@@ -120,6 +120,10 @@ vk::detail::DynamicLoader Instance::dl;
 
 Instance::Instance()
 {
+  PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr =
+    dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+
   bool debug = true;
 
   uint32_t version{ 0 };
@@ -193,8 +197,6 @@ Instance::Instance()
   {
     std::cerr << "UPS" << std::endl;
   }
-
-  extensions = getRequiredExtensions();
   /*
   *
   * from vulkan_structs.hpp:
@@ -221,13 +223,9 @@ Instance::Instance()
     vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
   debugUtilsMessengerCreateInfo.setPfnUserCallback(debugCallback);
 
-  PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr =
-    dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-  VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-
   createInfo.setPNext(&debugUtilsMessengerCreateInfo);
 
-  m_instance = vk::createInstance({}, nullptr);
+  m_instance = vk::createInstance(createInfo, nullptr);
   VULKAN_HPP_DEFAULT_DISPATCHER.init(m_instance);
   m_debugUtilsMessenger = m_instance.createDebugUtilsMessengerEXT(
     debugUtilsMessengerCreateInfo, nullptr, VULKAN_HPP_DEFAULT_DISPATCHER);
