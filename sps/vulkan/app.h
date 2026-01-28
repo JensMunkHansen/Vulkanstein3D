@@ -21,6 +21,7 @@ public:
   void run();
   void make_pipeline();
   void finalize_setup();
+  void recreate_swapchain();
   void record_draw_commands(vk::CommandBuffer, uint32_t imageIndex);
 
   void calculateFrameRate();

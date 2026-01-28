@@ -59,6 +59,11 @@ private:
     const std::uint32_t width, const std::uint32_t height, const bool vsync_enabled);
 
 public:
+  void recreate(std::uint32_t width, std::uint32_t height)
+  {
+    setup_swapchain(width, height, m_vsync_enabled);
+  }
+
   Swapchain(Device& device, VkSurfaceKHR surface, std::uint32_t width, std::uint32_t height,
     bool vsync_enabled);
 

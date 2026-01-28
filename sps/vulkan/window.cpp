@@ -68,4 +68,58 @@ void Window::poll()
   glfwPollEvents();
 }
 
+void Window::set_resize_pending(std::uint32_t width, std::uint32_t height)
+{
+  m_pending_width = width;
+  m_pending_height = height;
+  m_resize_pending = true;
+  spdlog::warn("RESIZE CALLBACK: {} x {}", width, height);
+}
+
+void Window::get_pending_resize(std::uint32_t& width, std::uint32_t& height)
+{
+  width = m_pending_width;
+  height = m_pending_height;
+  // Update stored dimensions
+  m_width = m_pending_width;
+  m_height = m_pending_height;
+  m_resize_pending = false;
+}
+
+void Window::wait_for_focus()
+{
+  int current_width = 0;
+  int current_height = 0;
+
+  do
+  {
+    glfwWaitEvents();
+    glfwGetFramebufferSize(m_window, &current_width, &current_height);
+  } while (current_width == 0 || current_height == 0);
+
+  m_width = current_width;
+  m_height = current_height;
+}
+
+void Window::set_user_ptr(void* user_ptr)
+{
+  glfwSetWindowUserPointer(m_window, user_ptr);
+}
+
+void Window::set_resize_callback(GLFWframebuffersizefun callback)
+{
+  glfwSetFramebufferSizeCallback(m_window, callback);
+  // Also set window size callback as backup
+  glfwSetWindowSizeCallback(m_window, callback);
+  spdlog::warn("Resize callback registered");
+}
+
+void Window::get_framebuffer_size(std::uint32_t& width, std::uint32_t& height) const
+{
+  int w, h;
+  glfwGetFramebufferSize(m_window, &w, &h);
+  width = static_cast<std::uint32_t>(w);
+  height = static_cast<std::uint32_t>(h);
+}
+
 }

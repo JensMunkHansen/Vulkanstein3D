@@ -99,7 +99,7 @@ Application::Application(int argc, char** argv)
   m_window_width = 800;
   m_window_height = 600;
 
-  const bool resizeable = false;
+  const bool resizeable = true;
   m_window = std::make_unique<sps::vulkan::Window>(
     m_window_title, m_window_width, m_window_height, true, resizeable, m_window_mode);
 
@@ -215,9 +215,21 @@ Application::Application(int argc, char** argv)
     std::make_unique<Device>(*m_instance, m_surface->get(), use_distinct_data_transfer_queue,
       physical_device, required_extensions, required_features, optional_features);
 
-  // Create swapchain
+  // Setup resize callback BEFORE creating swapchain
+  m_window->set_user_ptr(m_window.get());
+  m_window->set_resize_callback([](GLFWwindow* window, int width, int height) {
+    auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
+    win->set_resize_pending(static_cast<std::uint32_t>(width),
+      static_cast<std::uint32_t>(height));
+  });
+
+  // Get actual framebuffer size (may differ from requested size)
+  std::uint32_t fb_width, fb_height;
+  m_window->get_framebuffer_size(fb_width, fb_height);
+
+  // Create swapchain with actual framebuffer size
   m_swapchain = std::make_unique<Swapchain>(
-    *m_device, m_surface->get(), m_window->width(), m_window->height(), m_vsync_enabled);
+    *m_device, m_surface->get(), fb_width, fb_height, m_vsync_enabled);
 
   // Make pipeline
   make_pipeline();
@@ -335,6 +347,22 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
 
   commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
 
+  // Set dynamic viewport
+  vk::Viewport viewport{};
+  viewport.x = 0.0f;
+  viewport.y = 0.0f;
+  viewport.width = static_cast<float>(m_swapchain->extent().width);
+  viewport.height = static_cast<float>(m_swapchain->extent().height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  commandBuffer.setViewport(0, 1, &viewport);
+
+  // Set dynamic scissor
+  vk::Rect2D scissor{};
+  scissor.offset = vk::Offset2D{ 0, 0 };
+  scissor.extent = m_swapchain->extent();
+  commandBuffer.setScissor(0, 1, &scissor);
+
   commandBuffer.draw(3, 1, 0, 0);
 
   commandBuffer.endRenderPass();
@@ -371,33 +399,82 @@ void Application::calculateFrameRate()
   m_numFrames++;
 }
 
+void Application::recreate_swapchain()
+{
+  // 1. Wait for valid size (not 0×0)
+  std::uint32_t width, height;
+  m_window->get_framebuffer_size(width, height);
+  while (width == 0 || height == 0)
+  {
+    m_window->wait_for_focus();
+    m_window->get_framebuffer_size(width, height);
+  }
+
+  // 2. Wait for GPU to finish using old resources
+  m_device->wait_idle();
+
+  // 3. Destroy framebuffers (reverse order of creation)
+  for (auto framebuffer : m_frameBuffers)
+  {
+    m_device->device().destroyFramebuffer(framebuffer);
+  }
+  m_frameBuffers.clear();
+
+  // 4. Recreate swapchain (handles its own image views internally)
+  m_swapchain->recreate(width, height);
+
+  // 5. Create new framebuffers
+  sps::vulkan::framebufferInput frameBufferInput;
+  frameBufferInput.device = m_device->device();
+  frameBufferInput.renderpass = m_renderpass;
+  frameBufferInput.swapchainExtent = m_swapchain->extent();
+  m_frameBuffers = sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
+
+  // Clear resize flag if set
+  if (m_window->has_pending_resize())
+  {
+    std::uint32_t w, h;
+    m_window->get_pending_resize(w, h);
+  }
+
+  spdlog::trace("Swapchain recreated: {}x{}", m_swapchain->extent().width, m_swapchain->extent().height);
+}
+
 void Application::render()
 {
-
+  // Wait for previous frame to complete
   m_inFlight->block();
+
+  // Acquire next image
+  uint32_t imageIndex;
+  try
+  {
+    imageIndex = m_device->device()
+                   .acquireNextImageKHR(*m_swapchain->swapchain(), UINT64_MAX,
+                     *m_imageAvailable->semaphore(), nullptr)
+                   .value;
+  }
+  catch (const vk::OutOfDateKHRError&)
+  {
+    // Swapchain out of date - recreate and skip this frame
+    // Don't reset fence - it's still signaled, next frame can proceed
+    recreate_swapchain();
+    return;
+  }
+
+  // Reset fence only after successful acquire, before submit
   m_inFlight->reset();
 
-  // acquireNextImageKHR(vk::SwapChainKHR, timeout, semaphore_to_signal, fence)
-  uint32_t imageIndex{ m_device->device()
-                         .acquireNextImageKHR(*m_swapchain->swapchain(), UINT64_MAX,
-                           *m_imageAvailable->semaphore(), nullptr)
-                         .value };
-
   vk::CommandBuffer commandBuffer = m_commandBuffers[imageIndex];
-
   commandBuffer.reset();
-
   record_draw_commands(commandBuffer, imageIndex);
 
   vk::SubmitInfo submitInfo = {};
-
   vk::Semaphore waitSemaphores[] = { *m_imageAvailable->semaphore() };
-
   vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
   submitInfo.waitSemaphoreCount = 1;
   submitInfo.pWaitSemaphores = waitSemaphores;
   submitInfo.pWaitDstStageMask = waitStages;
-
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &commandBuffer;
 
@@ -405,37 +482,33 @@ void Application::render()
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
 
-  // Get queues from device, graphics and present queue
-  try
-  {
-    m_device->graphics_queue().submit(submitInfo, m_inFlight->get());
-  }
-  catch (vk::SystemError err)
-  {
+  m_device->graphics_queue().submit(submitInfo, m_inFlight->get());
 
-    if (m_debugMode)
-    {
-      std::cout << "failed to submit draw command buffer!" << std::endl;
-    }
-  }
-
+  // Present
   vk::PresentInfoKHR presentInfo = {};
   presentInfo.waitSemaphoreCount = 1;
   presentInfo.pWaitSemaphores = signalSemaphores;
-
   vk::SwapchainKHR swapChains[] = { *m_swapchain->swapchain() };
   presentInfo.swapchainCount = 1;
   presentInfo.pSwapchains = swapChains;
-
   presentInfo.pImageIndices = &imageIndex;
 
-  vk::Result result = m_device->present_queue().presentKHR(presentInfo);
-  if (result != vk::Result::eSuccess)
+  vk::Result presentResult;
+  try
   {
-    if (m_debugMode)
-    {
-      std::cout << "Error presenting" << std::endl;
-    }
+    presentResult = m_device->present_queue().presentKHR(presentInfo);
+  }
+  catch (const vk::OutOfDateKHRError&)
+  {
+    presentResult = vk::Result::eErrorOutOfDateKHR;
+  }
+
+  // Check if we need to recreate (out of date, suboptimal, or resize requested)
+  if (presentResult == vk::Result::eErrorOutOfDateKHR ||
+      presentResult == vk::Result::eSuboptimalKHR ||
+      m_window->has_pending_resize())
+  {
+    recreate_swapchain();
   }
 }
 

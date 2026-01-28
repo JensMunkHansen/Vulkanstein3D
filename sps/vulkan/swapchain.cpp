@@ -281,13 +281,17 @@ void Swapchain::setup_swapchain(
     ? std::min(caps.minImageCount + 1, caps.maxImageCount)
     : std::max(caps.minImageCount + 1, caps.minImageCount);
 
+  // Choose the actual extent (may differ from requested due to surface constraints)
+  const vk::Extent2D chosen_extent = choose_image_extent(
+    requested_extent, caps.minImageExtent, caps.maxImageExtent, caps.currentExtent);
+
   vk::SwapchainCreateInfoKHR createInfo =
-    vk::SwapchainCreateInfoKHR(vk::SwapchainCreateFlagsKHR(),                                    //
-      m_surface,                                                                                 //
-      imageCount,                                                                                //
-      m_surface_format.value().format,                                                           //
-      m_surface_format.value().colorSpace,                                                       //
-      choose_image_extent(requested_extent, caps.minImageExtent, caps.maxImageExtent, m_extent), //
+    vk::SwapchainCreateInfoKHR(vk::SwapchainCreateFlagsKHR(),      //
+      m_surface,                                                   //
+      imageCount,                                                  //
+      m_surface_format.value().format,                             //
+      m_surface_format.value().colorSpace,                         //
+      chosen_extent,                                               //
       1, // Image array layers
       vk::ImageUsageFlagBits::eColorAttachment);
 
@@ -345,8 +349,10 @@ void Swapchain::setup_swapchain(
     m_device.device().destroySwapchainKHR(old_swapchain);
   }
 
-  m_extent.width = width;
-  m_extent.height = height;
+  // Store the ACTUAL chosen extent, not the requested extent
+  m_extent = chosen_extent;
+  spdlog::trace("Swapchain created with extent {}x{} (requested {}x{})",
+    m_extent.width, m_extent.height, width, height);
 
   m_imgs = m_device.device().getSwapchainImagesKHR(m_swapchain);
   if (m_imgs.empty())
