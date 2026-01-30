@@ -23,7 +23,6 @@ add_library(${TARGET_NAME}
   exception.cpp
   swapchain.cpp
   swapchain_simple.cpp
-  device_old.cpp
   pipeline.cpp
   windowsurface.cpp
   commands.cpp
@@ -51,18 +50,4 @@ target_compile_options(
 
 add_subdirectory(shaders)
 add_dependencies(engine vulkan-shaders)
-
-if (0)
-string(
-  APPEND _opts
-  "$<IF:$<CXX_COMPILER_ID:MSVC>,"
-  "/W4;$<$<CONFIG:RELEASE>:/O2>,"
-  "-Wall;-Wextra;-Werror;"
-  "$<$<CONFIG:RELEASE>:-O3>"
-  "$<$<CXX_COMPILER_ID:Clang>:-stdlib=libc++>"
-  ">"
-  )
-add_compile_options("${_opts}")
-endif()
-
 

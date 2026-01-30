@@ -9,8 +9,7 @@
 #include <sps/vulkan/meta.hpp>
 #include <sps/vulkan/windowsurface.h>
 
-// TODO: Avoid this
-#include <sps/vulkan/device_old.h>
+#include <sps/vulkan/device.h>
 
 // Dirty-hacks
 #include <sps/vulkan/commands.h>
@@ -182,7 +181,7 @@ Application::Application(int argc, char** argv)
      */
     for (vk::PhysicalDevice device : physical_devices)
     {
-      sps::vulkan::log_device_properties(device);
+      Device::log_device_properties(device);
     }
   }
 
@@ -217,19 +216,21 @@ Application::Application(int argc, char** argv)
 
   // Setup resize callback BEFORE creating swapchain
   m_window->set_user_ptr(m_window.get());
-  m_window->set_resize_callback([](GLFWwindow* window, int width, int height) {
-    auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
-    win->set_resize_pending(static_cast<std::uint32_t>(width),
-      static_cast<std::uint32_t>(height));
-  });
+  m_window->set_resize_callback(
+    [](GLFWwindow* window, int width, int height)
+    {
+      auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
+      win->set_resize_pending(
+        static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+    });
 
   // Get actual framebuffer size (may differ from requested size)
   std::uint32_t fb_width, fb_height;
   m_window->get_framebuffer_size(fb_width, fb_height);
 
   // Create swapchain with actual framebuffer size
-  m_swapchain = std::make_unique<Swapchain>(
-    *m_device, m_surface->get(), fb_width, fb_height, m_vsync_enabled);
+  m_swapchain =
+    std::make_unique<Swapchain>(*m_device, m_surface->get(), fb_width, fb_height, m_vsync_enabled);
 
   // Make pipeline
   make_pipeline();
@@ -437,7 +438,8 @@ void Application::recreate_swapchain()
     m_window->get_pending_resize(w, h);
   }
 
-  spdlog::trace("Swapchain recreated: {}x{}", m_swapchain->extent().width, m_swapchain->extent().height);
+  spdlog::trace(
+    "Swapchain recreated: {}x{}", m_swapchain->extent().width, m_swapchain->extent().height);
 }
 
 void Application::render()
@@ -450,8 +452,8 @@ void Application::render()
   try
   {
     imageIndex = m_device->device()
-                   .acquireNextImageKHR(*m_swapchain->swapchain(), UINT64_MAX,
-                     *m_imageAvailable->semaphore(), nullptr)
+                   .acquireNextImageKHR(
+                     *m_swapchain->swapchain(), UINT64_MAX, *m_imageAvailable->semaphore(), nullptr)
                    .value;
   }
   catch (const vk::OutOfDateKHRError&)
@@ -505,8 +507,7 @@ void Application::render()
 
   // Check if we need to recreate (out of date, suboptimal, or resize requested)
   if (presentResult == vk::Result::eErrorOutOfDateKHR ||
-      presentResult == vk::Result::eSuboptimalKHR ||
-      m_window->has_pending_resize())
+    presentResult == vk::Result::eSuboptimalKHR || m_window->has_pending_resize())
   {
     recreate_swapchain();
   }

@@ -2,6 +2,7 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include <array>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -56,6 +57,8 @@ public:
     const vk::PhysicalDeviceFeatures& required_features,
     std::span<const char*> required_extensions);
 
+  static void log_device_properties(const vk::PhysicalDevice& device);
+
   static vk::PhysicalDevice pick_best_physical_device(
     std::vector<DeviceInfo>&& physical_device_infos,
     const vk::PhysicalDeviceFeatures& required_features,
@@ -97,8 +100,13 @@ public:
   void create_image_view(const vk::ImageViewCreateInfo& image_view_ci, vk::ImageView* image_view,
     const std::string& name) const;
 
-  void set_debug_marker_name(
-    void* object, vk::DebugReportObjectTypeEXT object_type, const std::string& name) const;
+  void set_debug_name(uint64_t objectHandle, vk::ObjectType object_type, const std::string& name) const;
+
+  void begin_debug_label(vk::CommandBuffer cmd, const std::string& name,
+    std::array<float, 4> color = { 1.0f, 1.0f, 1.0f, 1.0f }) const;
+  void end_debug_label(vk::CommandBuffer cmd) const;
+  void insert_debug_label(vk::CommandBuffer cmd, const std::string& name,
+    std::array<float, 4> color = { 1.0f, 1.0f, 1.0f, 1.0f }) const;
 
 private:
   //  mutable std::vector<std::unique_ptr<CommandPool>> m_cmd_pools;
@@ -124,15 +132,5 @@ private:
   mutable std::mutex m_mutex;
 
   vk::detail::DispatchLoaderDynamic m_dldi;
-
-  // Debug markers
-  PFN_vkDebugMarkerSetObjectNameEXT m_vk_debug_marker_set_object_name{ nullptr };
-#if 0
-  PFN_vkDebugMarkerSetObjectTagEXT m_vk_debug_marker_set_object_tag{ nullptr };
-  PFN_vkCmdDebugMarkerBeginEXT m_vk_cmd_debug_marker_begin{ nullptr };
-  PFN_vkCmdDebugMarkerEndEXT m_vk_cmd_debug_marker_end{ nullptr };
-  PFN_vkCmdDebugMarkerInsertEXT m_vk_cmd_debug_marker_insert{ nullptr };
-  PFN_vkSetDebugUtilsObjectNameEXT m_vk_set_debug_utils_object_name{ nullptr };
-#endif
 };
 }

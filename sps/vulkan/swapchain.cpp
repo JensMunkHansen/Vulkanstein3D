@@ -148,34 +148,6 @@ std::vector<vk::Image> Swapchain::get_swapchain_images()
   return m_device.device().getSwapchainImagesKHR(m_swapchain);
 }
 
-#if 0
-// For presentation
-void Swapchain::present(const std::uint32_t img_index)
-{
-  vk::PresentInfoKHR present_info{};
-  
-  const auto present_info = make_info<VkPresentInfoKHR>({
-    .swapchainCount = 1,
-    .pSwapchains = &m_swapchain,
-    .pImageIndices = &img_index,
-  });
-  if (const auto result = vkQueuePresentKHR(m_device.present_queue(), &present_info);
-      result != VK_SUCCESS)
-  {
-    if (result == VK_SUBOPTIMAL_KHR || result == VK_ERROR_OUT_OF_DATE_KHR)
-    {
-      // We need to recreate the swapchain
-      setup_swapchain(m_extent.width, m_extent.height, m_vsync_enabled);
-    }
-    else
-    {
-      // Exception is thrown if result is not VK_SUCCESS but also not VK_SUBOPTIMAL_KHR
-      throw VulkanException("Error: vkQueuePresentKHR failed!", result);
-    }
-  }
-}
-#endif
-
 void Swapchain::setup_swapchain(
   const std::uint32_t width, const std::uint32_t height, const bool vsync_enabled)
 {

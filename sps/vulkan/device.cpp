@@ -6,7 +6,6 @@
 #include <sps/vulkan/representation.h>
 
 #include <optional>
-#include <set>
 #include <span>
 #include <string>
 
@@ -49,6 +48,31 @@ bool is_extension_supported(
 namespace sps::vulkan
 {
 constexpr float DEFAULT_QUEUE_PRIORITY = 1.0f;
+
+void Device::log_device_properties(const vk::PhysicalDevice& device)
+{
+  vk::PhysicalDeviceProperties properties = device.getProperties();
+
+  spdlog::trace("\tDevice name: {}", properties.deviceName.data());
+
+  switch (properties.deviceType)
+  {
+    case (vk::PhysicalDeviceType::eCpu):
+      spdlog::trace("\tDevice type: CPU");
+      break;
+    case (vk::PhysicalDeviceType::eDiscreteGpu):
+      spdlog::trace("\tDevice type: Discrete GPU");
+      break;
+    case (vk::PhysicalDeviceType::eIntegratedGpu):
+      spdlog::trace("\tDevice type: Integrated GPU");
+      break;
+    case (vk::PhysicalDeviceType::eVirtualGpu):
+      spdlog::trace("\tDevice type: Virtual GPU");
+      break;
+    default:
+      spdlog::trace("\tDevice type: Other");
+  }
+}
 
 /// A function for rating physical devices by type
 /// @param info The physical device info
@@ -288,12 +312,7 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
     spdlog::warn("The application is forced not to use a distinct data transfer queue!");
   }
 
-#if 0
-  // Old stuff
-  vk::PhysicalDevice physicalDevice = choose_physical_device(inst.instance());
-  m_device = create_logical_device(physical_device, surface);
-#else
-  // Check if there is one queue family which can be used for both graphics and presentation
+// Check if there is one queue family which can be used for both graphics and presentation
   auto queue_candidate = find_queue_family_index_if(
     [&](const std::uint32_t index, const vk::QueueFamilyProperties& queue_family)
     {
@@ -422,28 +441,9 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
     throw;
   }
 
-#endif
   // Consider using volkLoadDevice (bypass Vulkan loader dispatch code)
-  // TODO: Use VK_EXT_debug_utils
-
-  const bool enable_debug_markers =
-    std::find_if(required_extensions.begin(), required_extensions.end(),
-      [&](const char* extension) {
-        return std::string(extension) == std::string(VK_EXT_DEBUG_MARKER_EXTENSION_NAME);
-      }) != required_extensions.end();
-
   m_dldi = vk::detail::DispatchLoaderDynamic(inst.instance(), vkGetInstanceProcAddr);
-
-#ifdef SPS_DEBUG
-  spdlog::trace("debug markers enabled {}", enable_debug_markers);
-
-  if (enable_debug_markers)
-  {
-    spdlog::trace("Initializing Vulkan debug markers");
-    // The debug marker extension is not part of the core, so function pointers need to be loaded
-    // manually. TODO: Figure this out
-  }
-#endif
+  m_dldi.init(m_device);
 
   spdlog::trace("Queue family indices:");
   spdlog::trace("   - Graphics: {}", m_graphics_queue_family_index);
@@ -494,7 +494,7 @@ void Device::create_fence(
   try
   {
     *pFence = m_device.createFence(fenceCreateInfo);
-    set_debug_marker_name(pFence, vk::DebugReportObjectTypeEXT::eFence, name);
+    set_debug_name(reinterpret_cast<uint64_t>(static_cast<VkFence>(*pFence)), vk::ObjectType::eFence, name);
   }
   catch (vk::SystemError err)
   {
@@ -510,7 +510,7 @@ void Device::create_image_view(const vk::ImageViewCreateInfo& image_view_ci,
   try
   {
     *pImageView = m_device.createImageView(image_view_ci);
-    set_debug_marker_name(pImageView, vk::DebugReportObjectTypeEXT::eImageView, name);
+    set_debug_name(reinterpret_cast<uint64_t>(static_cast<VkImageView>(*pImageView)), vk::ObjectType::eImageView, name);
   }
   catch (vk::SystemError err)
   {
@@ -525,7 +525,7 @@ void Device::create_semaphore(const vk::SemaphoreCreateInfo& semaphoreCreateInfo
   try
   {
     *pSemaphore = m_device.createSemaphore(semaphoreCreateInfo);
-    set_debug_marker_name(pSemaphore, vk::DebugReportObjectTypeEXT::eSemaphore, name);
+    set_debug_name(reinterpret_cast<uint64_t>(static_cast<VkSemaphore>(*pSemaphore)), vk::ObjectType::eSemaphore, name);
   }
   catch (vk::SystemError err)
   {
@@ -535,30 +535,54 @@ void Device::create_semaphore(const vk::SemaphoreCreateInfo& semaphoreCreateInfo
   }
 }
 
-void Device::set_debug_marker_name(
-  void* object, vk::DebugReportObjectTypeEXT object_type, const std::string& name) const
+void Device::set_debug_name(
+  uint64_t objectHandle, vk::ObjectType object_type, const std::string& name) const
 {
 #ifdef SPS_DEBUG
-  if (m_vk_debug_marker_set_object_name == nullptr)
-  {
-    return;
-  }
-
-  assert(object);
+  assert(objectHandle != 0);
   assert(!name.empty());
-  assert(m_vk_debug_marker_set_object_name);
 
-  const vk::DebugMarkerObjectNameInfoEXT nameInfo =
-    vk::DebugMarkerObjectNameInfoEXT()
-      .setObjectType(object_type)
-      .setObject(reinterpret_cast<std::uint64_t>(object))
-      .setPObjectName(name.c_str());
+  vk::DebugUtilsObjectNameInfoEXT nameInfo{};
+  nameInfo.objectType = object_type;
+  nameInfo.objectHandle = objectHandle;
+  nameInfo.pObjectName = name.c_str();
 
-  if (const auto result = m_device.debugMarkerSetObjectNameEXT(&nameInfo, m_dldi);
-      result != vk::Result::eSuccess)
+  m_device.setDebugUtilsObjectNameEXT(nameInfo, m_dldi);
+#endif
+}
+
+void Device::begin_debug_label(
+  vk::CommandBuffer cmd, const std::string& name, std::array<float, 4> color) const
+{
+#ifdef SPS_DEBUG
+  vk::DebugUtilsLabelEXT label{};
+  label.pLabelName = name.c_str();
+  for (size_t i = 0; i < 4; ++i)
   {
-    throw VulkanException("Failed to assign Vulkan debug marker name " + name + "!", result);
+    label.color[i] = color[i];
   }
+  cmd.beginDebugUtilsLabelEXT(label, m_dldi);
+#endif
+}
+
+void Device::end_debug_label(vk::CommandBuffer cmd) const
+{
+#ifdef SPS_DEBUG
+  cmd.endDebugUtilsLabelEXT(m_dldi);
+#endif
+}
+
+void Device::insert_debug_label(
+  vk::CommandBuffer cmd, const std::string& name, std::array<float, 4> color) const
+{
+#ifdef SPS_DEBUG
+  vk::DebugUtilsLabelEXT label{};
+  label.pLabelName = name.c_str();
+  for (size_t i = 0; i < 4; ++i)
+  {
+    label.color[i] = color[i];
+  }
+  cmd.insertDebugUtilsLabelEXT(label, m_dldi);
 #endif
 }
 }
