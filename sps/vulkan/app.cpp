@@ -1112,6 +1112,32 @@ void Application::recreate_swapchain()
   // 6. Recreate depth resources for new size
   create_depth_resources();
 
+  // 6b. Recreate RT storage image if RT is enabled
+  if (m_rt_image)
+  {
+    m_device->device().destroyImageView(m_rt_image_view);
+    m_device->device().destroyImage(m_rt_image);
+    m_device->device().freeMemory(m_rt_image_memory);
+    m_rt_image_view = VK_NULL_HANDLE;
+    m_rt_image = VK_NULL_HANDLE;
+    m_rt_image_memory = VK_NULL_HANDLE;
+    create_rt_storage_image();
+
+    // Update RT descriptor with new image view
+    vk::DescriptorImageInfo imageInfo{};
+    imageInfo.imageView = m_rt_image_view;
+    imageInfo.imageLayout = vk::ImageLayout::eGeneral;
+
+    vk::WriteDescriptorSet write{};
+    write.dstSet = m_rt_descriptor_set;
+    write.dstBinding = 1;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eStorageImage;
+    write.pImageInfo = &imageInfo;
+
+    m_device->device().updateDescriptorSets(write, {});
+  }
+
   // 7. Create new framebuffers
   sps::vulkan::framebufferInput frameBufferInput;
   frameBufferInput.device = m_device->device();

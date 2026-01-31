@@ -288,7 +288,7 @@ Instance::Instance()
       vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
         vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
         vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
-      debugCallback, nullptr);
+      reinterpret_cast<vk::PFN_DebugUtilsMessengerCallbackEXT>(debugCallback), nullptr);
 
   m_dldi = vk::detail::DispatchLoaderDynamic(m_instance, vkGetInstanceProcAddr);
 

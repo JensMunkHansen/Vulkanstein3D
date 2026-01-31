@@ -221,7 +221,8 @@ Instance::Instance()
   debugUtilsMessengerCreateInfo.setMessageType(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
     vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
     vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance);
-  debugUtilsMessengerCreateInfo.setPfnUserCallback(debugCallback);
+  debugUtilsMessengerCreateInfo.setPfnUserCallback(
+    reinterpret_cast<vk::PFN_DebugUtilsMessengerCallbackEXT>(debugCallback));
 
   createInfo.setPNext(&debugUtilsMessengerCreateInfo);
 
