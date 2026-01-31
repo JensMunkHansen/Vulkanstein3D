@@ -24,6 +24,12 @@ std::vector<vk::Framebuffer> make_framebuffers(framebufferInput inputChunk, //
   for (size_t i = 0; i < swapchain.image_count(); i++)
   {
     std::vector<vk::ImageView> attachments = { swapchain.image_views()[i] };
+
+    // Add depth attachment if provided (shared across all framebuffers)
+    if (inputChunk.depthImageView)
+    {
+      attachments.push_back(inputChunk.depthImageView);
+    }
     vk::FramebufferCreateInfo framebufferInfo;
     framebufferInfo.flags = vk::FramebufferCreateFlags();
     framebufferInfo.renderPass = inputChunk.renderpass;

@@ -1,0 +1,150 @@
+If you want something you can get running quickly, the fastest path is:
+
+start from a working Vulkan KHR ray tracing sample (so you’re not debugging SBT/AS builds), then
+
+add a homogeneous random-walk “SSS lob” in the closest-hit shader for a single material.
+
+Good bases to clone:
+
+nvpro-samples/vk_raytracing_tutorial_KHR (step-by-step Vulkan RT tutorial; very practical).
+
+vk_mini_path_tracer (small path tracer on Vulkan; nice for lighting/material experiments).
+
+For SSS background/reference (fast approximations + the “why it looks right” bits):
+
+GPU Gems Chapter 16 (classic real-time SSS approximations).
+
+Practical implementation notes for ray tracers (helpful even if not Vulkan-specific).
+
+Minimal “fast” SSS: random-walk inside the object (homogeneous medium)
+
+Idea: when the primary ray hits an SSS material, instead of returning a pure BRDF at the surface, do a few scattering steps inside the object. When you “exit” (or give up), you treat that as a diffuse-ish contribution (plus your usual specular on the original surface if you want).
+
+Data you need per material
+
+sigma_s (scattering coefficient, RGB)
+
+sigma_a (absorption coefficient, RGB)
+
+eta (IOR, optional if you also do refraction)
+
+g (anisotropy for HG phase; start with 0 isotropic)
+
+Let sigma_t = sigma_s + sigma_a.
+
+Closest-hit pseudocode (GLSL-ish)
+
+This is deliberately short and “drop-in concept” level (it’ll map to rayPayloadEXT + traceRayEXT in your existing tutorial base):
+
+// Utilities you need: RNG, cosine hemisphere sample, HG/isotropic sample,
+// and a way to trace rays against your TLAS.
+
+vec3 sample_isotropic(inout uint rng) {
+  // Uniform direction on sphere
+  float u1 = rnd(rng), u2 = rnd(rng);
+  float z  = 1.0 - 2.0 * u1;
+  float r  = sqrt(max(0.0, 1.0 - z*z));
+  float phi = 2.0 * 3.14159265 * u2;
+  return vec3(r*cos(phi), r*sin(phi), z);
+}
+
+float sample_free_flight(float sigma_t_scalar, inout uint rng) {
+  // Exponential distribution
+  float u = max(1e-6, rnd(rng));
+  return -log(u) / sigma_t_scalar;
+}
+
+vec3 sss_random_walk(vec3 x0, vec3 n0, vec3 sigma_s, vec3 sigma_a, inout uint rng) {
+  vec3 sigma_t = sigma_s + sigma_a;
+
+  // Very cheap scalar free-flight distance: luminance of sigma_t
+  float sigma_t_s = max(1e-4, dot(sigma_t, vec3(0.2126, 0.7152, 0.0722)));
+
+  // Start just beneath the surface to avoid self-intersection
+  vec3 x = x0 - n0 * 1e-3;
+  vec3 w = sample_isotropic(rng);
+
+  vec3 throughput = vec3(1.0);
+  vec3 radiance   = vec3(0.0);
+
+  const int MAX_STEPS = 6; // keep tiny for "fast example"
+  for (int i = 0; i < MAX_STEPS; ++i) {
+    float s = sample_free_flight(sigma_t_s, rng);
+    vec3  x_next = x + w * s;
+
+    // Check if we leave the object:
+    // Trace a short segment ray inside -> outside test.
+    // Implementation detail: traceRayEXT with flags that *accept backfaces*,
+    // and see whether the first hit is "the same object" and closer than s.
+    HitInfo h = trace_segment_inside_object(x, w, s);
+
+    if (!h.hitSameObjectBeforeDistanceS) {
+      // We exited somewhere along this step.
+      // Treat exit as "diffuse emission point" and sample environment / lights.
+      // Cheapest: one shadow ray / NEE to a light + environment.
+      radiance += throughput * sample_lighting_at_exit(x_next, -w, rng);
+      break;
+    }
+
+    // We scattered inside the medium. Update throughput with albedo & absorption.
+    vec3 albedo = sigma_s / max(sigma_t, vec3(1e-4));
+    throughput *= albedo;
+
+    // Optional absorption over traveled distance (cheap Beer’s law using scalar):
+    float absorb = exp(-dot(sigma_a, vec3(0.2126,0.7152,0.0722)) * s);
+    throughput *= absorb;
+
+    // New direction (isotropic; add HG later if you want)
+    x = x_next;
+    w = sample_isotropic(rng);
+
+    // Russian roulette (keep it simple)
+    float p = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
+    if (rnd(rng) > p) break;
+    throughput /= p;
+  }
+
+  return radiance;
+}
+
+What makes this actually work in Vulkan RT
+
+The only “non-trivial” missing piece above is trace_segment_inside_object. In a tutorial base like vk_raytracing_tutorial_KHR, you already have:
+
+TLAS/BLAS
+
+traceRayEXT
+
+a payload struct
+
+You implement trace_segment_inside_object(x, w, s) as a ray trace with:
+
+tMin = 0
+
+tMax = s
+
+backface culling disabled (you want intersections from inside)
+
+a payload that records the closest hit’s instance/custom index
+
+then you decide “same object” by comparing the hit’s instance ID/material ID with the one you’re currently shading.
+
+That’s enough for a first SSS demo.
+
+Why this is “fast” (and where it breaks)
+
+It’s fast because it’s a handful of extra rays per SSS hit (a few internal segment tests + maybe 1 lighting sample).
+
+It breaks on thin features unless you tune the epsilon and segment checks carefully, and it’ll be noisy unless you denoise or keep steps low.
+
+If you later want cleaner SSS at the same spp, look into diffusion/BSSRDF importance sampling and ReSTIR-style reuse (this is where modern real-time research is going).
+
+Practical starter values (so you see something immediately)
+
+Wax-ish: sigma_s = vec3(2.0, 1.0, 0.5), sigma_a = vec3(0.1, 0.05, 0.02)
+
+Skin-ish (toy): sigma_s = vec3(1.5, 1.0, 0.7), sigma_a = vec3(0.4, 0.2, 0.1)
+
+MAX_STEPS = 4..8
+
+If you tell me whether you’re starting from vk_raytracing_tutorial_KHR or vk_mini_path_tracer, I can adapt the payload + traceRayEXT flags to the exact structure those repos use.

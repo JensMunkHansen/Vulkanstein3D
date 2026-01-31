@@ -6,13 +6,23 @@
 
 namespace sps::vulkan
 {
-vk::PipelineLayout make_pipeline_layout(vk::Device device, bool debug)
+vk::PipelineLayout make_pipeline_layout(
+  vk::Device device, vk::DescriptorSetLayout descriptorSetLayout, bool debug)
 {
-
   vk::PipelineLayoutCreateInfo layoutInfo;
   layoutInfo.flags = vk::PipelineLayoutCreateFlags();
-  layoutInfo.setLayoutCount = 0;
   layoutInfo.pushConstantRangeCount = 0;
+
+  if (descriptorSetLayout)
+  {
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &descriptorSetLayout;
+  }
+  else
+  {
+    layoutInfo.setLayoutCount = 0;
+  }
+
   try
   {
     return device.createPipelineLayout(layoutInfo);
@@ -27,10 +37,12 @@ vk::PipelineLayout make_pipeline_layout(vk::Device device, bool debug)
   return nullptr;
 }
 
-vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageFormat, bool debug)
+vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageFormat,
+  bool depthEnabled, vk::Format depthFormat, bool debug)
 {
+  std::vector<vk::AttachmentDescription> attachments;
 
-  // Define a general attachment, with its load/store operations
+  // Color attachment
   vk::AttachmentDescription colorAttachment = {};
   colorAttachment.flags = vk::AttachmentDescriptionFlags();
   colorAttachment.format = swapchainImageFormat;
@@ -41,26 +53,67 @@ vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageForma
   colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
   colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
   colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+  attachments.push_back(colorAttachment);
 
-  // Declare that attachment to be color buffer 0 of the framebuffer
+  // Depth attachment (optional)
+  vk::AttachmentDescription depthAttachment = {};
+  if (depthEnabled)
+  {
+    depthAttachment.flags = vk::AttachmentDescriptionFlags();
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+    depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    attachments.push_back(depthAttachment);
+  }
+
+  // Color attachment reference
   vk::AttachmentReference colorAttachmentRef = {};
   colorAttachmentRef.attachment = 0;
   colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
 
-  // Renderpasses are broken down into subpasses, there's always at least one.
+  // Depth attachment reference
+  vk::AttachmentReference depthAttachmentRef = {};
+  depthAttachmentRef.attachment = 1;
+  depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+  // Subpass
   vk::SubpassDescription subpass = {};
   subpass.flags = vk::SubpassDescriptionFlags();
   subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
   subpass.colorAttachmentCount = 1;
   subpass.pColorAttachments = &colorAttachmentRef;
+  if (depthEnabled)
+  {
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
+  }
 
-  // Now create the renderpass
+  // Subpass dependency
+  vk::SubpassDependency dependency = {};
+  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependency.dstSubpass = 0;
+  dependency.srcStageMask =
+    vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+  dependency.srcAccessMask = vk::AccessFlagBits::eNone;
+  dependency.dstStageMask =
+    vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+  dependency.dstAccessMask =
+    vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+  // Create renderpass
   vk::RenderPassCreateInfo renderpassInfo = {};
   renderpassInfo.flags = vk::RenderPassCreateFlags();
-  renderpassInfo.attachmentCount = 1;
-  renderpassInfo.pAttachments = &colorAttachment;
+  renderpassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+  renderpassInfo.pAttachments = attachments.data();
   renderpassInfo.subpassCount = 1;
   renderpassInfo.pSubpasses = &subpass;
+  renderpassInfo.dependencyCount = 1;
+  renderpassInfo.pDependencies = &dependency;
+
   try
   {
     return device.createRenderPass(renderpassInfo);
@@ -99,8 +152,12 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   // Vertex Input
   vk::PipelineVertexInputStateCreateInfo vertexInputInfo = {};
   vertexInputInfo.flags = vk::PipelineVertexInputStateCreateFlags();
-  vertexInputInfo.vertexBindingDescriptionCount = 0;
-  vertexInputInfo.vertexAttributeDescriptionCount = 0;
+  vertexInputInfo.vertexBindingDescriptionCount =
+    static_cast<uint32_t>(specification.vertexBindings.size());
+  vertexInputInfo.pVertexBindingDescriptions = specification.vertexBindings.data();
+  vertexInputInfo.vertexAttributeDescriptionCount =
+    static_cast<uint32_t>(specification.vertexAttributes.size());
+  vertexInputInfo.pVertexAttributeDescriptions = specification.vertexAttributes.data();
   pipelineInfo.pVertexInputState = &vertexInputInfo;
 
   // Input Assembly
@@ -139,7 +196,8 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   rasterizer.rasterizerDiscardEnable = VK_FALSE; // This flag would disable fragment output
   rasterizer.polygonMode = vk::PolygonMode::eFill;
   rasterizer.lineWidth = 1.0f;
-  rasterizer.cullMode = vk::CullModeFlagBits::eBack;
+  rasterizer.cullMode =
+    specification.backfaceCulling ? vk::CullModeFlagBits::eBack : vk::CullModeFlagBits::eNone;
   rasterizer.frontFace = vk::FrontFace::eClockwise;
   rasterizer.depthBiasEnable = VK_FALSE; // Depth bias can be useful in shadow maps.
   pipelineInfo.pRasterizationState = &rasterizer;
@@ -168,6 +226,15 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
   pipelineInfo.pMultisampleState = &multisampling;
 
+  // Depth Stencil
+  vk::PipelineDepthStencilStateCreateInfo depthStencil = {};
+  depthStencil.depthTestEnable = specification.depthTestEnabled ? VK_TRUE : VK_FALSE;
+  depthStencil.depthWriteEnable = specification.depthTestEnabled ? VK_TRUE : VK_FALSE;
+  depthStencil.depthCompareOp = vk::CompareOp::eLess;
+  depthStencil.depthBoundsTestEnable = VK_FALSE;
+  depthStencil.stencilTestEnable = VK_FALSE;
+  pipelineInfo.pDepthStencilState = &depthStencil;
+
   // Color Blend
   vk::PipelineColorBlendAttachmentState colorBlendAttachment = {};
   colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR |
@@ -191,7 +258,8 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   {
     std::cout << "Create Pipeline Layout" << std::endl;
   }
-  vk::PipelineLayout pipelineLayout = make_pipeline_layout(specification.device, debug);
+  vk::PipelineLayout pipelineLayout =
+    make_pipeline_layout(specification.device, specification.descriptorSetLayout, debug);
   pipelineInfo.layout = pipelineLayout;
 
   // Renderpass
@@ -199,8 +267,8 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   {
     std::cout << "Create RenderPass" << std::endl;
   }
-  vk::RenderPass renderpass =
-    make_renderpass(specification.device, specification.swapchainImageFormat, debug);
+  vk::RenderPass renderpass = make_renderpass(specification.device, specification.swapchainImageFormat,
+    specification.depthTestEnabled, specification.depthFormat, debug);
   pipelineInfo.renderPass = renderpass;
   pipelineInfo.subpass = 0;
 

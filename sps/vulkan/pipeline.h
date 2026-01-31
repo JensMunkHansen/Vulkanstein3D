@@ -3,6 +3,7 @@
 #include <sps/vulkan/config.h>
 
 #include <string>
+#include <vector>
 #include <vulkan/vulkan.hpp>
 
 namespace sps::vulkan
@@ -17,6 +18,18 @@ struct GraphicsPipelineInBundle
   std::string fragmentFilepath;
   vk::Extent2D swapchainExtent;
   vk::Format swapchainImageFormat;
+  vk::DescriptorSetLayout descriptorSetLayout{ VK_NULL_HANDLE }; // Optional
+
+  // Vertex input (optional - if empty, no vertex buffers used)
+  std::vector<vk::VertexInputBindingDescription> vertexBindings;
+  std::vector<vk::VertexInputAttributeDescription> vertexAttributes;
+
+  // Rasterizer options
+  bool backfaceCulling{ true };
+
+  // Depth testing
+  bool depthTestEnabled{ false };
+  vk::Format depthFormat{ vk::Format::eD32Sfloat };
 };
 
 /**

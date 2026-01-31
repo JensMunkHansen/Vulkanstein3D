@@ -1,5 +1,10 @@
 #include <sps/vulkan/config.h>
 
+#include <vulkan/vulkan.hpp>
+
+// Dynamic dispatch loader storage (must be in exactly one cpp file)
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
+
 #include <GLFW/glfw3.h>
 #include <spdlog/spdlog.h>
 #include <sps/vulkan/exception.h>
@@ -66,6 +71,9 @@ Instance::Instance(const std::string& application_name, const std::string& engin
   assert(!engine_name.empty());
 
   spdlog::trace("Initializing Vulkan metaloader");
+
+  // Initialize dynamic dispatch loader with vkGetInstanceProcAddr
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
   uint32_t version{ 0 };
   vkEnumerateInstanceVersion(&version);
@@ -273,6 +281,9 @@ Instance::Instance(const std::string& application_name, const std::string& engin
     spdlog::trace("Bum. {}", vk::to_string(result));
     throw VulkanException("Failed to create Vulkan instance.", static_cast<VkResult>(result));
   }
+
+  // Initialize default dispatcher with instance (for instance-level extension functions)
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(m_instance);
 
 #ifdef SPS_DEBUG
   // We cannot use this in release mode

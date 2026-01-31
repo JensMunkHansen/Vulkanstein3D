@@ -4,6 +4,9 @@
 title = "vulkan-renderer-configuration"
 
 [vulkan]
+# Preferred GPU (partial name match). Examples: "Intel", "NVIDIA"
+preferred_gpu = "NVIDIA"
+
 # Driver ICDs to try in order of preference (first available will be used)
 driver_icds = [
     "/usr/share/vulkan/icd.d/nvidia_icd.json",
@@ -23,6 +26,34 @@ mode = "windowed"
 width = 1280
 height = 720
 name = "Vulkan Triangle"
+
+[application.rendering]
+backface_culling = false
+# Rendering mode: "rasterization" or "raytracing" (R key toggles at runtime)
+mode = "raytracing"
+
+[application.geometry]
+# Geometry source: "triangle" (built-in default) or "ply" (load from file)
+source = "ply"
+
+# Path to PLY file (used when source = "ply")
+ply_file = "../../data/VertexColorLowerJawScan.ply"
+
+[application.lighting]
+# Light direction (for directional light) or position (for point light)
+light_direction = [0.3, 0.5, 1.0]
+light_type = "directional"  # "directional" or "point"
+
+# Light color and intensity
+light_color = [1.0, 1.0, 1.0]
+light_intensity = 1.0
+
+# Ambient light color
+ambient_color = [0.15, 0.15, 0.15]
+
+# Material properties
+shininess = 32.0
+specular_strength = 0.4
 
 [shaders]
 [shaders.vertex]

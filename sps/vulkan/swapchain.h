@@ -84,6 +84,7 @@ public:
   [[nodiscard]] vk::Format image_format() const { return m_surface_format.value().format; }
 
   [[nodiscard]] const std::vector<vk::ImageView>& image_views() const { return m_img_views; }
+  [[nodiscard]] const std::vector<vk::Image>& images() const { return m_imgs; }
   [[nodiscard]] const vk::SwapchainKHR* swapchain() const { return &m_swapchain; }
 };
 };

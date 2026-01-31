@@ -257,6 +257,13 @@ void Swapchain::setup_swapchain(
   const vk::Extent2D chosen_extent = choose_image_extent(
     requested_extent, caps.minImageExtent, caps.maxImageExtent, caps.currentExtent);
 
+  // Usage flags: color attachment for raster, transfer dst for RT blit
+  vk::ImageUsageFlags imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
+  if (caps.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst)
+  {
+    imageUsage |= vk::ImageUsageFlagBits::eTransferDst;
+  }
+
   vk::SwapchainCreateInfoKHR createInfo =
     vk::SwapchainCreateInfoKHR(vk::SwapchainCreateFlagsKHR(),      //
       m_surface,                                                   //
@@ -265,9 +272,7 @@ void Swapchain::setup_swapchain(
       m_surface_format.value().colorSpace,                         //
       chosen_extent,                                               //
       1, // Image array layers
-      vk::ImageUsageFlagBits::eColorAttachment);
-
-  createInfo.setImageUsage(vk::ImageUsageFlagBits::eColorAttachment);
+      imageUsage);
 
   if (m_device.m_present_queue_family_index != m_device.m_graphics_queue_family_index)
   {

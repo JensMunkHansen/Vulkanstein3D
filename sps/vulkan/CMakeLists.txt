@@ -27,6 +27,14 @@ add_library(${TARGET_NAME}
   windowsurface.cpp
   commands.cpp
   framebuffer.cpp
+  camera.cpp
+  buffer.cpp
+  descriptor_builder.cpp
+  mesh.cpp
+  ply_loader.cpp
+  miniply.cpp
+  acceleration_structure.cpp
+  raytracing_pipeline.cpp
   ../tools/cla_parser.cpp
   )
 
@@ -40,6 +48,12 @@ target_link_libraries(${TARGET_NAME}
   ${Vulkan_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}
   ${CMAKE_DL_LIBS}
+)
+
+# Enable Vulkan dynamic dispatch for extension functions (ray tracing, etc.)
+# This MUST be defined before any vulkan.hpp includes
+target_compile_definitions(${TARGET_NAME}
+  PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
 )
 
 target_compile_options(

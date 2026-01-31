@@ -243,6 +243,7 @@ vk::PhysicalDevice Device::pick_best_physical_device( //
   {
     throw std::runtime_error("Error: There are no physical devices available!");
   }
+
   std::sort(physical_device_infos.begin(), physical_device_infos.end(),
     [&](const auto& lhs, const auto& rhs)
     { return compare_physical_devices(required_features, required_extensions, lhs, rhs); });
@@ -256,9 +257,27 @@ vk::PhysicalDevice Device::pick_best_physical_device( //
 
 vk::PhysicalDevice Device::pick_best_physical_device( //
   const Instance& inst, const vk::SurfaceKHR& surface,
-  const vk::PhysicalDeviceFeatures& required_features, std::span<const char*> required_extensions)
+  const vk::PhysicalDeviceFeatures& required_features, std::span<const char*> required_extensions,
+  const std::string& preferred_gpu)
 {
   std::vector<vk::PhysicalDevice> availableDevices = inst.instance().enumeratePhysicalDevices();
+
+  // If a preferred GPU is specified, select it before querying surface info
+  // (surface queries can hang on some drivers in hybrid GPU setups)
+  if (!preferred_gpu.empty())
+  {
+    for (const auto& device : availableDevices)
+    {
+      auto props = device.getProperties();
+      std::string name(props.deviceName.data());
+      if (name.find(preferred_gpu) != std::string::npos)
+      {
+        spdlog::info("Preferred GPU '{}' found: selecting '{}'", preferred_gpu, name);
+        return device;
+      }
+    }
+    spdlog::warn("Preferred GPU '{}' not found, using default selection", preferred_gpu);
+  }
 
   std::vector<DeviceInfo> infos(availableDevices.size());
   std::transform(availableDevices.begin(), availableDevices.end(), infos.begin(),
@@ -287,7 +306,8 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   vk::PhysicalDevice physical_device,
   std::span<const char*> required_extensions, // contains swapchain
   const vk::PhysicalDeviceFeatures& required_features,
-  const vk::PhysicalDeviceFeatures& optional_features)
+  const vk::PhysicalDeviceFeatures& optional_features,
+  bool enable_ray_tracing)
   : m_physical_device(physical_device)
 {
   if (!is_device_suitable(
@@ -298,6 +318,15 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
 
   m_gpu_name = get_physical_device_name(m_physical_device);
   spdlog::trace("Creating device using graphics card: {}", m_gpu_name);
+
+  // Query ray tracing capabilities
+  m_ray_tracing_capabilities = query_ray_tracing_capabilities(m_physical_device);
+
+  // If ray tracing requested but not supported, disable it
+  if (enable_ray_tracing && !m_ray_tracing_capabilities.supported)
+  {
+    spdlog::warn("Ray tracing requested but not supported on this device");
+  }
 
   spdlog::trace("Creating Vulkan device queues");
   std::vector<vk::DeviceQueueCreateInfo> queues_to_create;
@@ -423,12 +452,47 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
 #endif
 
-  // Why not layers and then extenstions???
+  // Build list of extensions (required + optional ray tracing)
+  std::vector<const char*> extensions_to_enable(required_extensions.begin(), required_extensions.end());
+
+  // Add ray tracing extensions if supported and requested
+  if (enable_ray_tracing && m_ray_tracing_capabilities.supported)
+  {
+    extensions_to_enable.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+    extensions_to_enable.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+    extensions_to_enable.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+    // Required by acceleration structure
+    extensions_to_enable.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+    // Required by ray tracing pipeline
+    extensions_to_enable.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
+    extensions_to_enable.push_back(VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+
+    spdlog::trace("Enabling ray tracing extensions");
+  }
+
+  // Create device with extended features for ray tracing
+  vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
+  bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
+
+  vk::PhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
+  asFeatures.accelerationStructure = VK_TRUE;
+  asFeatures.pNext = &bufferDeviceAddressFeatures;
+
+  vk::PhysicalDeviceRayTracingPipelineFeaturesKHR rtPipelineFeatures{};
+  rtPipelineFeatures.rayTracingPipeline = VK_TRUE;
+  rtPipelineFeatures.pNext = &asFeatures;
+
   vk::DeviceCreateInfo deviceInfo = vk::DeviceCreateInfo(vk::DeviceCreateFlags(), //
     queues_to_create.size(), queues_to_create.data(),                             //
     enabledLayers.size(), enabledLayers.data(),                                   //
-    required_extensions.size(), required_extensions.data(),                       //
+    extensions_to_enable.size(), extensions_to_enable.data(),                     //
     &m_enabled_features);
+
+  // Chain ray tracing features if enabled
+  if (enable_ray_tracing && m_ray_tracing_capabilities.supported)
+  {
+    deviceInfo.pNext = &rtPipelineFeatures;
+  }
 
   try
   {
@@ -440,6 +504,9 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
     spdlog::trace("Device creation failed!");
     throw;
   }
+
+  // Initialize default dispatcher with device (for device-level extension functions like ray tracing)
+  VULKAN_HPP_DEFAULT_DISPATCHER.init(m_device);
 
   // Consider using volkLoadDevice (bypass Vulkan loader dispatch code)
   m_dldi = vk::detail::DispatchLoaderDynamic(inst.instance(), vkGetInstanceProcAddr);
@@ -454,6 +521,85 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   // Since we only have one queue per queue family, we acquire index 0.
   m_present_queue = m_device.getQueue(m_present_queue_family_index, 0);
   m_graphics_queue = m_device.getQueue(m_graphics_queue_family_index, 0);
+}
+
+RayTracingCapabilities Device::query_ray_tracing_capabilities(vk::PhysicalDevice physical_device)
+{
+  RayTracingCapabilities caps{};
+
+  // Check for required extensions
+  auto extensions = physical_device.enumerateDeviceExtensionProperties();
+
+  bool has_acceleration_structure = false;
+  bool has_ray_tracing_pipeline = false;
+  bool has_deferred_host_ops = false;
+
+  for (const auto& ext : extensions)
+  {
+    std::string name = ext.extensionName.data();
+    if (name == VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+      has_acceleration_structure = true;
+    if (name == VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
+      has_ray_tracing_pipeline = true;
+    if (name == VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME)
+      has_deferred_host_ops = true;
+  }
+
+  caps.supported = has_acceleration_structure && has_ray_tracing_pipeline && has_deferred_host_ops;
+
+  if (!caps.supported)
+  {
+    spdlog::trace("Ray tracing not supported: missing extensions");
+    return caps;
+  }
+
+  // Query ray tracing pipeline properties
+  vk::PhysicalDeviceRayTracingPipelinePropertiesKHR rt_pipeline_props{};
+  vk::PhysicalDeviceAccelerationStructurePropertiesKHR as_props{};
+
+  vk::PhysicalDeviceProperties2 props2{};
+  props2.pNext = &rt_pipeline_props;
+  rt_pipeline_props.pNext = &as_props;
+
+  physical_device.getProperties2(&props2);
+
+  // Fill in pipeline properties
+  caps.shaderGroupHandleSize = rt_pipeline_props.shaderGroupHandleSize;
+  caps.maxRayRecursionDepth = rt_pipeline_props.maxRayRecursionDepth;
+  caps.maxShaderGroupStride = rt_pipeline_props.maxShaderGroupStride;
+  caps.shaderGroupBaseAlignment = rt_pipeline_props.shaderGroupBaseAlignment;
+  caps.shaderGroupHandleAlignment = rt_pipeline_props.shaderGroupHandleAlignment;
+  caps.maxRayHitAttributeSize = rt_pipeline_props.maxRayHitAttributeSize;
+
+  // Fill in acceleration structure properties
+  caps.maxGeometryCount = as_props.maxGeometryCount;
+  caps.maxInstanceCount = as_props.maxInstanceCount;
+  caps.maxPrimitiveCount = as_props.maxPrimitiveCount;
+  caps.minAccelerationStructureScratchOffsetAlignment = as_props.minAccelerationStructureScratchOffsetAlignment;
+
+  spdlog::trace("Ray tracing supported:");
+  spdlog::trace("  - Max ray recursion depth: {}", caps.maxRayRecursionDepth);
+  spdlog::trace("  - Max primitive count: {}", caps.maxPrimitiveCount);
+  spdlog::trace("  - Shader group handle size: {}", caps.shaderGroupHandleSize);
+
+  return caps;
+}
+
+uint32_t Device::find_memory_type(
+  uint32_t type_filter, vk::MemoryPropertyFlags properties) const
+{
+  vk::PhysicalDeviceMemoryProperties mem_properties = m_physical_device.getMemoryProperties();
+
+  for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++)
+  {
+    if ((type_filter & (1 << i)) &&
+        (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
+    {
+      return i;
+    }
+  }
+
+  throw std::runtime_error("Failed to find suitable memory type!");
 }
 
 Device::~Device()
