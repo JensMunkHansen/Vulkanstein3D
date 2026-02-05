@@ -367,8 +367,21 @@ void main()
   float exposure = ubo.flags.w;
   color *= exposure;
 
-  // HDR tone mapping (Khronos PBR Neutral - best for accurate colors)
-  color = toneMapKhronosPbrNeutral(color);
+  // HDR tone mapping (selectable via ibl_params.z)
+  // 0 = None, 1 = Reinhard, 2 = ACES Narkowicz, 3 = ACES Hill, 4 = ACES Hill + Boost, 5 = Khronos PBR Neutral
+  int tonemapMode = int(ubo.ibl_params.z);
+  if (tonemapMode == 1) {
+    color = toneMapReinhard(color);
+  } else if (tonemapMode == 2) {
+    color = toneMapACES_Narkowicz(color);
+  } else if (tonemapMode == 3) {
+    color = toneMapACES_Hill(color);
+  } else if (tonemapMode == 4) {
+    color = toneMapACES_Hill(color / 0.6);  // Exposure boost
+  } else if (tonemapMode == 5) {
+    color = toneMapKhronosPbrNeutral(color);
+  }
+  // else mode 0: no tone mapping, just gamma
 
   // Gamma correction (linear to sRGB)
   color = linearToSRGB(color);

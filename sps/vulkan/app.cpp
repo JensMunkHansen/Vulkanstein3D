@@ -929,11 +929,12 @@ void Application::update_uniform_buffer()
       m_use_ao ? 1.0f : 0.0f,
       m_exposure);
 
-    // IBL parameters: x=useIBL, y=intensity, z=reserved, w=reserved
+    // IBL parameters: x=useIBL, y=intensity, z=tonemapMode, w=reserved
     ubo.ibl_params = glm::vec4(
       m_use_ibl ? 1.0f : 0.0f,
       m_ibl ? m_ibl->intensity() : 1.0f,
-      0.0f, 0.0f);
+      static_cast<float>(m_tonemap_mode),
+      0.0f);
   }
 
   m_uniform_buffer->update(ubo);

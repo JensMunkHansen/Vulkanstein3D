@@ -122,6 +122,8 @@ int main(int argc, char* argv[])
       {
         // PBR-specific controls
         ImGui::SliderFloat("Exposure", &app.exposure(), 0.1f, 5.0f);
+        ImGui::Combo("Tone Mapping", &app.tonemap_mode(),
+          Application::tonemap_names, IM_ARRAYSIZE(Application::tonemap_names));
         ImGui::SliderFloat("AO Strength", &app.ao_strength(), 0.0f, 1.0f);
 
         ImGui::Separator();

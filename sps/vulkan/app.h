@@ -96,6 +96,8 @@ public:
   bool& use_ibl() { return m_use_ibl; }
   float ibl_intensity() const { return m_ibl ? m_ibl->intensity() : 1.0f; }
   void set_ibl_intensity(float v) { if (m_ibl) m_ibl->set_intensity(v); }
+  int& tonemap_mode() { return m_tonemap_mode; }
+  static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)", "ACES + Boost", "Khronos PBR Neutral" };
   bool& show_light_indicator() { return m_show_light_indicator; }
   Camera& camera() { return m_camera; }
   bool vsync_enabled() const { return m_vsync_enabled; }
@@ -253,6 +255,7 @@ private:
   bool m_use_emissive = true;     // Emissive texture enabled by default
   bool m_use_ao = true;           // Ambient occlusion enabled by default
   bool m_use_ibl = false;         // IBL disabled by default (use direct lighting)
+  int m_tonemap_mode = 5;         // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR
   int m_current_shader_mode = 0;  // Index into shader_modes[]
 
   // 2D Debug mode
