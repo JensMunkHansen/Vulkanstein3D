@@ -253,22 +253,48 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   colorBlending.blendConstants[3] = 0.0f;
   pipelineInfo.pColorBlendState = &colorBlending;
 
-  // Pipeline Layout
-  if (debug)
+  // Pipeline Layout - use existing if provided, otherwise create new
+  vk::PipelineLayout pipelineLayout;
+  if (specification.existingPipelineLayout)
   {
-    std::cout << "Create Pipeline Layout" << std::endl;
+    if (debug)
+    {
+      std::cout << "Using existing Pipeline Layout" << std::endl;
+    }
+    pipelineLayout = specification.existingPipelineLayout;
   }
-  vk::PipelineLayout pipelineLayout =
-    make_pipeline_layout(specification.device, specification.descriptorSetLayout, debug);
+  else
+  {
+    if (debug)
+    {
+      std::cout << "Create Pipeline Layout" << std::endl;
+    }
+    pipelineLayout =
+      make_pipeline_layout(specification.device, specification.descriptorSetLayout, debug);
+  }
   pipelineInfo.layout = pipelineLayout;
 
-  // Renderpass
-  if (debug)
+  // Renderpass - use existing if provided, otherwise create new
+  vk::RenderPass renderpass;
+  bool ownsRenderPass = false;
+  if (specification.existingRenderPass)
   {
-    std::cout << "Create RenderPass" << std::endl;
+    if (debug)
+    {
+      std::cout << "Using existing RenderPass" << std::endl;
+    }
+    renderpass = specification.existingRenderPass;
   }
-  vk::RenderPass renderpass = make_renderpass(specification.device, specification.swapchainImageFormat,
-    specification.depthTestEnabled, specification.depthFormat, debug);
+  else
+  {
+    if (debug)
+    {
+      std::cout << "Create RenderPass" << std::endl;
+    }
+    renderpass = make_renderpass(specification.device, specification.swapchainImageFormat,
+      specification.depthTestEnabled, specification.depthFormat, debug);
+    ownsRenderPass = true;
+  }
   pipelineInfo.renderPass = renderpass;
   pipelineInfo.subpass = 0;
 

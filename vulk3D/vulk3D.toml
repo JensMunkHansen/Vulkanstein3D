@@ -30,19 +30,34 @@ name = "Vulkan Triangle"
 [application.rendering]
 backface_culling = false
 # Rendering mode: "rasterization" or "raytracing" (R key toggles at runtime)
-mode = "raytracing"
+mode = "rasterization"
 
 [application.geometry]
-# Geometry source: "triangle" (built-in default) or "ply" (load from file)
-source = "ply"
+# Geometry source: "triangle" (built-in default), "ply", or "gltf"
+source = "gltf"
 
 # Path to PLY file (used when source = "ply")
 ply_file = "../../data/VertexColorLowerJawScan.ply"
 
+# Path to glTF file (used when source = "gltf")
+gltf_file = "/home/jmh/github/Rendering/filament/third_party/models/DamagedHelmet/DamagedHelmet.glb"
+
 [application.lighting]
+# Light type: "directional", "point", or "area"
+light_type = "area"
+
 # Light direction (for directional light) or position (for point light)
 light_direction = [0.3, 0.5, 1.0]
-light_type = "directional"  # "directional" or "point"
+
+# Area light corners (counter-clockwise winding, used when light_type = "area")
+# Example: 2x2 unit square light positioned 2 units above origin
+area_corners = [
+    [-1.0, 2.0, -1.0],
+    [ 1.0, 2.0, -1.0],
+    [ 1.0, 2.0,  1.0],
+    [-1.0, 2.0,  1.0],
+]
+area_two_sided = false
 
 # Light color and intensity
 light_color = [1.0, 1.0, 1.0]
@@ -54,6 +69,7 @@ ambient_color = [0.15, 0.15, 0.15]
 # Material properties
 shininess = 32.0
 specular_strength = 0.4
+roughness = 0.5  # Used for area light LTC lookup (0.0 = smooth, 1.0 = rough)
 
 [shaders]
 [shaders.vertex]

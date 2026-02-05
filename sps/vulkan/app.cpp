@@ -8,6 +8,11 @@
 #include <sps/vulkan/app.h>
 #include <sps/vulkan/meta.hpp>
 #include <sps/vulkan/ply_loader.h>
+#include <sps/vulkan/gltf_loader.h>
+#include <sps/vulkan/screenshot.h>
+#include <sps/vulkan/debug_constants.h>
+
+#include <fstream>
 #include <sps/vulkan/vertex.h>
 #include <sps/vulkan/windowsurface.h>
 
@@ -25,6 +30,7 @@
 #include <toml.hpp>
 
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <cstdlib>
 #include <iostream>
@@ -132,16 +138,17 @@ Application::Application(int argc, char** argv)
     spdlog::trace("Preferential graphics card index {} specified", *preferred_graphics_card);
   }
 
-  const auto enable_vertical_synchronisation = cla_parser.arg<bool>("--vsync");
-  if (enable_vertical_synchronisation.value_or(false))
-  {
-    spdlog::trace("V-sync enabled!");
-    m_vsync_enabled = true;
-  }
-  else
+  // V-sync defaults to ON (prevents tearing), use --no-vsync to disable
+  const auto disable_vertical_synchronisation = cla_parser.arg<bool>("--no-vsync");
+  if (disable_vertical_synchronisation.value_or(false))
   {
     spdlog::trace("V-sync disabled!");
     m_vsync_enabled = false;
+  }
+  else
+  {
+    spdlog::trace("V-sync enabled!");
+    m_vsync_enabled = true;
   }
 
   bool use_distinct_data_transfer_queue = true;
@@ -247,6 +254,7 @@ Application::Application(int argc, char** argv)
 
   // Create uniform buffer and descriptor
   create_uniform_buffer();
+
   create_descriptor();
 
   // Make pipeline (needs descriptor layout and vertex format)
@@ -350,14 +358,15 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     renderer_configuration, "application", "geometry", "source", "triangle");
   m_ply_file = toml::find_or<std::string>(
     renderer_configuration, "application", "geometry", "ply_file", "");
-  spdlog::trace("Geometry source: {}, PLY file: {}", m_geometry_source, m_ply_file);
+  m_gltf_file = toml::find_or<std::string>(
+    renderer_configuration, "application", "geometry", "gltf_file", "");
+  spdlog::trace("Geometry source: {}, PLY file: {}, glTF file: {}", m_geometry_source, m_ply_file, m_gltf_file);
 
   // Lighting options
   try
   {
     const auto& lighting = toml::find(renderer_configuration, "application", "lighting");
 
-    auto light_dir = toml::find<std::vector<double>>(lighting, "light_direction");
     auto light_type = toml::find<std::string>(lighting, "light_type");
     auto light_color = toml::find<std::vector<double>>(lighting, "light_color");
     auto light_intensity = static_cast<float>(toml::find<double>(lighting, "light_intensity"));
@@ -369,6 +378,7 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     // Create appropriate light type
     if (light_type == "directional")
     {
+      auto light_dir = toml::find<std::vector<double>>(lighting, "light_direction");
       auto light = std::make_unique<DirectionalLight>();
       if (light_dir.size() >= 3)
       {
@@ -377,8 +387,21 @@ void Application::load_toml_configuration_file(const std::string& file_name)
       }
       m_light = std::move(light);
     }
+    else if (light_type == "point")
+    {
+      auto light_dir = toml::find<std::vector<double>>(lighting, "light_direction");
+      auto light = std::make_unique<PointLight>();
+      if (light_dir.size() >= 3)
+      {
+        light->set_position(static_cast<float>(light_dir[0]),
+          static_cast<float>(light_dir[1]), static_cast<float>(light_dir[2]));
+      }
+      m_light = std::move(light);
+    }
     else
     {
+      // Default to point light
+      auto light_dir = toml::find_or<std::vector<double>>(lighting, "light_direction", {0.0, 0.0, 0.0});
       auto light = std::make_unique<PointLight>();
       if (light_dir.size() >= 3)
       {
@@ -427,8 +450,94 @@ void Application::setup_camera()
 
 void Application::create_default_mesh()
 {
+  // Create default 1x1 white texture for fallback
+  const uint8_t white_pixel[] = { 255, 255, 255, 255 };
+  m_defaultTexture = std::make_unique<Texture>(*m_device, "default white", white_pixel, 1, 1);
+
+  // Create default 1x1 flat normal texture (pointing up in tangent space: 0,0,1 -> RGB 128,128,255)
+  // Reference: https://docs.unity3d.com/Manual/StandardShaderMaterialParameterNormalMap.html
+  const uint8_t flat_normal[] = { 128, 128, 255, 255 };
+  m_defaultNormalTexture = std::make_unique<Texture>(*m_device, "default normal", flat_normal, 1, 1);
+
+  // Create default 1x1 metallic/roughness texture (non-metallic, medium roughness)
+  // glTF format: G=roughness, B=metallic (R and A unused, set to white for visibility)
+  // Default: roughness=0.5 (128), metallic=0 (0)
+  const uint8_t default_mr[] = { 255, 128, 0, 255 };  // R=unused, G=roughness(0.5), B=metallic(0), A=unused
+  m_defaultMetallicRoughness = std::make_unique<Texture>(*m_device, "default metallic/roughness", default_mr, 1, 1);
+
+  // Create default 1x1 emissive texture (black = no emission)
+  const uint8_t default_emissive[] = { 0, 0, 0, 255 };
+  m_defaultEmissive = std::make_unique<Texture>(*m_device, "default emissive", default_emissive, 1, 1);
+
+  // Create default 1x1 AO texture (white = no occlusion)
+  // glTF stores AO in R channel, but we sample all channels for simplicity
+  const uint8_t default_ao[] = { 255, 255, 255, 255 };
+  m_defaultAO = std::make_unique<Texture>(*m_device, "default ao", default_ao, 1, 1);
+
+  // Create IBL from HDR environment map
+  // TODO: Add HDR path to TOML config and environment selection in ImGui
+  std::string hdr_path = "../../data/neutral.hdr";  // Khronos glTF-Sample-Viewer default
+  try {
+    m_ibl = std::make_unique<IBL>(*m_device, hdr_path, 128);
+  } catch (const std::exception& e) {
+    spdlog::warn("Failed to load HDR '{}': {} - using neutral environment", hdr_path, e.what());
+    m_ibl = std::make_unique<IBL>(*m_device);
+  }
+
   // Check geometry source from config
-  if (m_geometry_source == "ply" && !m_ply_file.empty())
+  if (m_geometry_source == "gltf" && !m_gltf_file.empty())
+  {
+    // Try to load glTF file with textures
+    GltfModel model = load_gltf_model(*m_device, m_gltf_file);
+
+    if (model.mesh)
+    {
+      m_mesh = std::move(model.mesh);
+      m_baseColorTexture = std::move(model.baseColorTexture);
+      m_normalTexture = std::move(model.normalTexture);
+      m_metallicRoughnessTexture = std::move(model.metallicRoughnessTexture);
+      m_emissiveTexture = std::move(model.emissiveTexture);
+      m_aoTexture = std::move(model.aoTexture);
+
+      spdlog::info("Loaded glTF mesh from {}: {} vertices, {} indices",
+        m_gltf_file, m_mesh->vertex_count(), m_mesh->index_count());
+
+      if (m_baseColorTexture)
+      {
+        spdlog::info("  with base color texture: {}x{}",
+          m_baseColorTexture->width(), m_baseColorTexture->height());
+      }
+      if (m_normalTexture)
+      {
+        spdlog::info("  with normal texture: {}x{}",
+          m_normalTexture->width(), m_normalTexture->height());
+      }
+      if (m_metallicRoughnessTexture)
+      {
+        spdlog::info("  with metallic/roughness texture: {}x{}",
+          m_metallicRoughnessTexture->width(), m_metallicRoughnessTexture->height());
+      }
+      if (m_emissiveTexture)
+      {
+        spdlog::info("  with emissive texture: {}x{}",
+          m_emissiveTexture->width(), m_emissiveTexture->height());
+      }
+      if (m_aoTexture)
+      {
+        spdlog::info("  with AO texture: {}x{}",
+          m_aoTexture->width(), m_aoTexture->height());
+      }
+
+      // Adjust camera for the mesh
+      m_camera.set_position(0.0f, 0.0f, 5.0f);
+      m_camera.set_focal_point(0.0f, 0.0f, 0.0f);
+      m_camera.set_clipping_range(0.1f, 100.0f);
+      return;
+    }
+
+    spdlog::warn("Could not load glTF from {}, falling back to triangle", m_gltf_file);
+  }
+  else if (m_geometry_source == "ply" && !m_ply_file.empty())
   {
     // Try to load PLY file from config path
     m_mesh = load_ply(*m_device, m_ply_file);
@@ -516,12 +625,40 @@ void Application::create_uniform_buffer()
 
 void Application::create_descriptor()
 {
-  m_descriptor = std::make_unique<ResourceDescriptor>(
-    DescriptorBuilder(*m_device)
-      .add_uniform_buffer<UniformBufferObject>(m_uniform_buffer->buffer(), 0,
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment)
-      .build("camera descriptor"));
-  spdlog::trace("Created descriptor");
+  // Choose textures: use loaded if available, otherwise defaults
+  Texture* colorTex = m_baseColorTexture ? m_baseColorTexture.get() : m_defaultTexture.get();
+  Texture* normalTex = m_normalTexture ? m_normalTexture.get() : m_defaultNormalTexture.get();
+  Texture* mrTex = m_metallicRoughnessTexture ? m_metallicRoughnessTexture.get() : m_defaultMetallicRoughness.get();
+  Texture* emissiveTex = m_emissiveTexture ? m_emissiveTexture.get() : m_defaultEmissive.get();
+  Texture* aoTex = m_aoTexture ? m_aoTexture.get() : m_defaultAO.get();
+
+  DescriptorBuilder builder(*m_device);
+  builder.add_uniform_buffer<UniformBufferObject>(m_uniform_buffer->buffer(), 0,
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(colorTex->image_view(), colorTex->sampler(), 1,
+    vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(normalTex->image_view(), normalTex->sampler(), 2,
+    vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(mrTex->image_view(), mrTex->sampler(), 3,
+    vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(emissiveTex->image_view(), emissiveTex->sampler(), 4,
+    vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(aoTex->image_view(), aoTex->sampler(), 5,
+    vk::ShaderStageFlagBits::eFragment);
+
+  // IBL textures (bindings 6, 7, 8)
+  if (m_ibl)
+  {
+    builder.add_combined_image_sampler(m_ibl->brdf_lut_view(), m_ibl->brdf_lut_sampler(), 6,
+      vk::ShaderStageFlagBits::eFragment);
+    builder.add_combined_image_sampler(m_ibl->irradiance_view(), m_ibl->irradiance_sampler(), 7,
+      vk::ShaderStageFlagBits::eFragment);
+    builder.add_combined_image_sampler(m_ibl->prefiltered_view(), m_ibl->prefiltered_sampler(), 8,
+      vk::ShaderStageFlagBits::eFragment);
+  }
+
+  m_descriptor = std::make_unique<ResourceDescriptor>(builder.build("camera descriptor"));
+  spdlog::trace("Created descriptor with PBR texture bindings + IBL");
 }
 
 void Application::create_rt_storage_image()
@@ -763,7 +900,41 @@ void Application::update_uniform_buffer()
 
   // Camera position for specular calculation
   ubo.viewPos = glm::vec4(m_camera.position(), 1.0f);
-  ubo.material = glm::vec4(m_shininess, m_specularStrength, 0.0f, 0.0f);
+
+  if (m_debug_2d_mode)
+  {
+    // 2D mode: repurpose uniforms for texture viewing
+    // viewPos: xy = pan offset, z = zoom level
+    ubo.viewPos = glm::vec4(m_debug_2d_pan.x, m_debug_2d_pan.y, m_debug_2d_zoom, 0.0f);
+
+    // material.z = textureIndex (0=baseColor, 1=normal, 2=metalRough, 3=emissive, 4=ao)
+    ubo.material = glm::vec4(m_shininess, m_specularStrength,
+      static_cast<float>(m_debug_texture_index), m_aoStrength);
+
+    // flags.x = channelMode (0=RGB, 1=R, 2=G, 3=B, 4=A)
+    ubo.flags = glm::vec4(
+      static_cast<float>(m_debug_channel_mode),
+      0.0f, 0.0f, 0.0f);
+  }
+  else
+  {
+    // 3D mode: normal material parameters
+    // Material parameters: x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength
+    ubo.material = glm::vec4(m_shininess, m_specularStrength, m_metallicAmbient, m_aoStrength);
+
+    // Rendering flags: x=useNormalMap, y=useEmissive, z=useAO, w=exposure
+    ubo.flags = glm::vec4(
+      m_use_normal_mapping ? 1.0f : 0.0f,
+      m_use_emissive ? 1.0f : 0.0f,
+      m_use_ao ? 1.0f : 0.0f,
+      m_exposure);
+
+    // IBL parameters: x=useIBL, y=intensity, z=reserved, w=reserved
+    ubo.ibl_params = glm::vec4(
+      m_use_ibl ? 1.0f : 0.0f,
+      m_ibl ? m_ibl->intensity() : 1.0f,
+      0.0f, 0.0f);
+  }
 
   m_uniform_buffer->update(ubo);
 }
@@ -847,7 +1018,20 @@ void Application::mouse_callback(GLFWwindow* window, double xpos, double ypos)
   app->m_lastMouseX = xpos;
   app->m_lastMouseY = ypos;
 
-  // Only rotate when right mouse button is pressed
+  // 2D mode: pan with left mouse button drag
+  if (app->m_debug_2d_mode)
+  {
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+    {
+      // Pan speed scales with zoom (pan faster when zoomed out)
+      const float panSpeed = 0.001f / app->m_debug_2d_zoom;
+      app->m_debug_2d_pan.x -= static_cast<float>(xoffset) * panSpeed;
+      app->m_debug_2d_pan.y += static_cast<float>(yoffset) * panSpeed;
+    }
+    return;
+  }
+
+  // 3D mode: rotate when right mouse button is pressed
   if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
   {
     const float sensitivity = 0.3f;
@@ -868,7 +1052,21 @@ void Application::scroll_callback(GLFWwindow* window, double xoffset, double yof
 {
   auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
 
-  // Scroll to dolly in/out
+  // 2D mode: scroll to zoom
+  if (app->m_debug_2d_mode)
+  {
+    const float zoomFactor = 1.15f;
+    if (yoffset > 0)
+      app->m_debug_2d_zoom *= zoomFactor;
+    else if (yoffset < 0)
+      app->m_debug_2d_zoom /= zoomFactor;
+
+    // Clamp zoom to reasonable range
+    app->m_debug_2d_zoom = glm::clamp(app->m_debug_2d_zoom, 0.1f, 50.0f);
+    return;
+  }
+
+  // 3D mode: scroll to dolly in/out
   if (yoffset > 0)
     app->m_camera.dolly(1.1f);
   else if (yoffset < 0)
@@ -1016,12 +1214,6 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
 
     commandBuffer.beginRenderPass(&renderPassInfo, vk::SubpassContents::eInline);
 
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-
-    // Bind descriptor set (uniform buffer)
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
-      m_descriptor->descriptor_set(), {});
-
     // Set dynamic viewport
     vk::Viewport viewport{};
     viewport.x = 0.0f;
@@ -1038,11 +1230,38 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     scissor.extent = m_swapchain->extent();
     commandBuffer.setScissor(0, 1, &scissor);
 
-    // Bind and draw mesh
-    if (m_mesh)
+    if (m_debug_2d_mode)
     {
-      m_mesh->bind(commandBuffer);
-      m_mesh->draw(commandBuffer);
+      // 2D mode: fullscreen quad to display texture
+      commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipeline);
+      commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipelineLayout, 0,
+        m_descriptor->descriptor_set(), {});
+
+      // Draw fullscreen triangle (3 vertices, no vertex buffer)
+      commandBuffer.draw(3, 1, 0, 0);
+    }
+    else
+    {
+      // 3D mode: render mesh
+      commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+      commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
+        m_descriptor->descriptor_set(), {});
+
+      // Bind and draw mesh
+      if (m_mesh)
+      {
+        m_mesh->bind(commandBuffer);
+        m_mesh->draw(commandBuffer);
+      }
+
+      // TODO: Light indicator needs push constants for per-draw model matrix
+      // Updating UBO mid-frame doesn't work - GPU sees final state for all draws
+    }
+
+    // Call UI render callback (for ImGui etc.)
+    if (m_ui_render_callback)
+    {
+      m_ui_render_callback(commandBuffer);
     }
 
     commandBuffer.endRenderPass();
@@ -1233,10 +1452,18 @@ void Application::render()
 
 void Application::make_pipeline()
 {
+  make_pipeline("../sps/vulkan/shaders/vertex.spv", "../sps/vulkan/shaders/fragment.spv");
+}
+
+void Application::make_pipeline(const std::string& vertex_shader, const std::string& fragment_shader)
+{
+  m_vertex_shader_path = vertex_shader;
+  m_fragment_shader_path = fragment_shader;
+
   sps::vulkan::GraphicsPipelineInBundle specification = {};
   specification.device = m_device->device();
-  specification.vertexFilepath = "../sps/vulkan/shaders/vertex.spv";
-  specification.fragmentFilepath = "../sps/vulkan/shaders/fragment.spv";
+  specification.vertexFilepath = vertex_shader;
+  specification.fragmentFilepath = fragment_shader;
   specification.swapchainExtent = m_swapchain->extent();
   specification.swapchainImageFormat = m_swapchain->image_format();
   specification.descriptorSetLayout = m_descriptor->layout();
@@ -1262,6 +1489,272 @@ void Application::make_pipeline()
   m_pipeline = output.pipeline;
 }
 
+void Application::create_debug_2d_pipeline()
+{
+  sps::vulkan::GraphicsPipelineInBundle specification = {};
+  specification.device = m_device->device();
+  specification.vertexFilepath = "../sps/vulkan/shaders/fullscreen_quad.spv";
+  specification.fragmentFilepath = "../sps/vulkan/shaders/debug_texture2d.spv";
+  specification.swapchainExtent = m_swapchain->extent();
+  specification.swapchainImageFormat = m_swapchain->image_format();
+  specification.descriptorSetLayout = m_descriptor->layout();
+
+  // No vertex input - fullscreen quad generates vertices in shader
+  // vertexBindings and vertexAttributes left empty
+
+  // Rasterizer options
+  specification.backfaceCulling = false;
+
+  // Use existing render pass (must match main pipeline's render pass for compatibility)
+  // Even though we don't use depth, we need a compatible render pass
+  specification.existingRenderPass = m_renderpass;
+  specification.depthTestEnabled = false;  // We won't write depth, but pass is compatible
+  specification.depthFormat = m_depthFormat;
+
+  sps::vulkan::GraphicsPipelineOutBundle output =
+    sps::vulkan::create_graphics_pipeline(specification, true);
+
+  m_debug_2d_pipelineLayout = output.layout;
+  m_debug_2d_pipeline = output.pipeline;
+
+  spdlog::info("Created 2D debug pipeline");
+}
+
+void Application::create_light_indicator()
+{
+  // Generate procedural UV sphere centered at origin
+  // Model matrix will position it at the light location
+  const int stacks = 8;
+  const int slices = 16;
+  const float radius = 1.0f;  // Unit sphere, scaled by model matrix
+
+  std::vector<Vertex> vertices;
+  std::vector<uint32_t> indices;
+
+  // Get light color for the sphere
+  glm::vec3 lightColor = m_light ? glm::vec3(m_light->color()) : glm::vec3(1.0f, 1.0f, 0.0f);
+
+  // Generate vertices
+  for (int i = 0; i <= stacks; ++i)
+  {
+    float phi = static_cast<float>(i) / stacks * 3.14159265359f;
+    float y = std::cos(phi) * radius;
+    float r = std::sin(phi) * radius;
+
+    for (int j = 0; j <= slices; ++j)
+    {
+      float theta = static_cast<float>(j) / slices * 2.0f * 3.14159265359f;
+      float x = r * std::cos(theta);
+      float z = r * std::sin(theta);
+
+      Vertex v;
+      v.position = glm::vec3(x, y, z);
+      v.normal = glm::normalize(v.position);
+      v.color = lightColor;  // Use light color
+      v.texCoord = glm::vec2(static_cast<float>(j) / slices, static_cast<float>(i) / stacks);
+      vertices.push_back(v);
+    }
+  }
+
+  // Generate indices
+  for (int i = 0; i < stacks; ++i)
+  {
+    for (int j = 0; j < slices; ++j)
+    {
+      int first = i * (slices + 1) + j;
+      int second = first + slices + 1;
+
+      indices.push_back(first);
+      indices.push_back(second);
+      indices.push_back(first + 1);
+
+      indices.push_back(second);
+      indices.push_back(second + 1);
+      indices.push_back(first + 1);
+    }
+  }
+
+  m_light_indicator_mesh = std::make_unique<Mesh>(*m_device, "light_indicator", vertices, indices);
+
+  // No separate pipeline needed - reuse main pipeline with different model matrix
+  spdlog::info("Created light indicator sphere ({} vertices)", vertices.size());
+}
+
+void Application::reload_shaders(const std::string& vertex_shader, const std::string& fragment_shader)
+{
+  m_device->wait_idle();
+
+  // Destroy old pipeline (keep renderpass and layout for now - they're compatible)
+  m_device->device().destroyPipeline(m_pipeline);
+  m_device->device().destroyPipelineLayout(m_pipelineLayout);
+  m_device->device().destroyRenderPass(m_renderpass);
+
+  make_pipeline(vertex_shader, fragment_shader);
+
+  spdlog::info("Reloaded shaders: {} + {}", vertex_shader, fragment_shader);
+}
+
+bool Application::save_screenshot(const std::string& filepath)
+{
+  m_device->wait_idle();
+
+  // Get current swapchain image
+  auto images = m_swapchain->images();
+  if (images.empty())
+  {
+    spdlog::error("No swapchain images available for screenshot");
+    return false;
+  }
+
+  // Use the first swapchain image (most recently presented)
+  vk::Image source_image = images[0];
+  vk::Format format = m_swapchain->image_format();
+  vk::Extent2D extent = m_swapchain->extent();
+
+  return sps::vulkan::save_screenshot(*m_device, m_commandPool, source_image, format, extent, filepath);
+}
+
+bool Application::save_screenshot()
+{
+  std::string filename = sps::vulkan::generate_screenshot_filename("screenshot", ".png");
+  return save_screenshot(filename);
+}
+
+void Application::poll_commands()
+{
+  // Initialize command registry on first call
+  if (!m_command_registry)
+  {
+    m_command_registry = std::make_unique<CommandRegistry>();
+
+    // Register "set" command for variables
+    m_command_registry->add("set", "Set a variable", "<name> <value>",
+      [this](const std::vector<std::string>& args) {
+        if (args.size() < 2) return;
+        const std::string& name = args[0];
+        float value = std::stof(args[1]);
+
+        if (name == "metallic_ambient") m_metallicAmbient = value;
+        else if (name == "ao_strength") m_aoStrength = value;
+        else if (name == "shininess") m_shininess = value;
+        else if (name == "specular") m_specularStrength = value;
+        else if (name == "normal_mapping") m_use_normal_mapping = value > 0.5f;
+        else if (name == "emissive") m_use_emissive = value > 0.5f;
+        else if (name == "ao") m_use_ao = value > 0.5f;
+        else if (name == "texture") m_debug_texture_index = static_cast<int>(value);
+        else if (name == "channel") m_debug_channel_mode = static_cast<int>(value);
+        else if (name == "2d") m_debug_2d_mode = value > 0.5f;
+        else spdlog::warn("Unknown variable: {}", name);
+      });
+
+    // Register "shader" command
+    m_command_registry->add("shader", "Switch shader mode", "<index|name>",
+      [this](const std::vector<std::string>& args) {
+        if (args.empty()) return;
+        int mode = std::stoi(args[0]);
+        if (mode >= 0 && mode < sps::vulkan::debug::SHADER_COUNT) {
+          reload_shaders(sps::vulkan::debug::vertex_shaders[mode], sps::vulkan::debug::fragment_shaders[mode]);
+          m_current_shader_mode = mode;
+        }
+      });
+
+    // Register "screenshot" command
+    m_command_registry->add("screenshot", "Save screenshot", "[filename]",
+      [this](const std::vector<std::string>& args) {
+        if (args.empty()) {
+          save_screenshot();
+        } else {
+          save_screenshot(args[0]);
+        }
+      });
+
+    // Register "mode" command for 2D/3D toggle
+    m_command_registry->add("mode", "Switch 2D/3D mode", "<2d|3d>",
+      [this](const std::vector<std::string>& args) {
+        if (args.empty()) return;
+        m_debug_2d_mode = (args[0] == "2d");
+      });
+
+    spdlog::info("Command file: {}", std::filesystem::absolute(m_command_file_path).string());
+  }
+
+  // Check if command file was modified
+  if (!std::filesystem::exists(m_command_file_path))
+  {
+    // Create empty file
+    std::ofstream file(m_command_file_path);
+    file << "# Commands: set <var> <val>, shader <idx>, screenshot [file], mode <2d|3d>\n";
+    file.close();
+    return;
+  }
+
+  auto file_time = std::filesystem::last_write_time(m_command_file_path);
+  auto file_mtime = file_time.time_since_epoch().count();
+  if (file_mtime <= static_cast<decltype(file_mtime)>(m_command_file_mtime)) return;
+  m_command_file_mtime = static_cast<time_t>(file_mtime);
+
+  // Read and execute commands
+  std::ifstream file(m_command_file_path);
+  std::string line;
+  std::vector<std::string> commands;
+  while (std::getline(file, line))
+  {
+    if (line.empty() || line[0] == '#') continue;
+    commands.push_back(line);
+  }
+  file.close();
+
+  for (const auto& cmd : commands)
+  {
+    spdlog::info("Executing: {}", cmd);
+    if (!m_command_registry->execute(cmd))
+    {
+      spdlog::warn("Unknown command: {}", cmd);
+    }
+  }
+
+  // Clear the file
+  std::ofstream clear_file(m_command_file_path);
+  clear_file << "# Commands: set <var> <val>, shader <idx>, screenshot [file], mode <2d|3d>\n";
+  clear_file << "# Variables: metallic_ambient, ao_strength, shininess, specular\n";
+  clear_file << "# Toggles: normal_mapping, emissive, ao, 2d (0 or 1)\n";
+  clear_file << "# texture: 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao\n";
+  clear_file << "# channel: 0=RGB, 1=R, 2=G, 3=B, 4=A\n";
+  clear_file.close();
+}
+
+void Application::apply_shader_mode(int mode)
+{
+  // Must match main_imgui.cpp shader arrays
+  static const char* vertex_shaders[] = {
+    "../sps/vulkan/shaders/vertex.spv",  // PBR
+    "../sps/vulkan/shaders/vertex.spv",  // Blinn-Phong
+    "../sps/vulkan/shaders/vertex.spv",  // Debug UV
+    "../sps/vulkan/shaders/vertex.spv",  // Debug Normals
+    "../sps/vulkan/shaders/vertex.spv",  // Debug Base Color
+    "../sps/vulkan/shaders/vertex.spv",  // Debug Metallic/Roughness
+    "../sps/vulkan/shaders/vertex.spv",  // Debug AO
+    "../sps/vulkan/shaders/vertex.spv"   // Debug Emissive
+  };
+  static const char* fragment_shaders[] = {
+    "../sps/vulkan/shaders/fragment.spv",
+    "../sps/vulkan/shaders/blinn_phong.spv",
+    "../sps/vulkan/shaders/debug_uv.spv",
+    "../sps/vulkan/shaders/debug_normals.spv",
+    "../sps/vulkan/shaders/debug_basecolor.spv",
+    "../sps/vulkan/shaders/debug_metallic_roughness.spv",
+    "../sps/vulkan/shaders/debug_ao.spv",
+    "../sps/vulkan/shaders/debug_emissive.spv"
+  };
+
+  constexpr int num_shaders = sizeof(fragment_shaders) / sizeof(fragment_shaders[0]);
+  if (mode >= 0 && mode < num_shaders)
+  {
+    m_current_shader_mode = mode;
+    reload_shaders(vertex_shaders[mode], fragment_shaders[mode]);
+  }
+}
+
 Application::~Application()
 {
   spdlog::trace("Destroying Application");
@@ -1275,6 +1768,16 @@ Application::~Application()
   // Destroy resources before device
   m_descriptor.reset();
   m_uniform_buffer.reset();
+  m_baseColorTexture.reset();
+  m_normalTexture.reset();
+  m_metallicRoughnessTexture.reset();
+  m_emissiveTexture.reset();
+  m_aoTexture.reset();
+  m_defaultTexture.reset();
+  m_defaultNormalTexture.reset();
+  m_defaultMetallicRoughness.reset();
+  m_defaultEmissive.reset();
+  m_defaultAO.reset();
   m_mesh.reset();
 
   m_device->device().destroyCommandPool(m_commandPool);
@@ -1282,6 +1785,10 @@ Application::~Application()
   m_device->device().destroyPipeline(m_pipeline);
   m_device->device().destroyPipelineLayout(m_pipelineLayout);
   m_device->device().destroyRenderPass(m_renderpass);
+
+  // Destroy 2D debug pipeline (render pass is shared with main pipeline)
+  m_device->device().destroyPipeline(m_debug_2d_pipeline);
+  m_device->device().destroyPipelineLayout(m_debug_2d_pipelineLayout);
 
   for (auto framebuffer : m_frameBuffers)
   {
@@ -1334,6 +1841,12 @@ void Application::finalize_setup()
   m_imageAvailable = std::make_unique<Semaphore>(*m_device, "image-available");
   m_renderFinished = std::make_unique<Semaphore>(*m_device, "render-finished");
 
+  // Create 2D debug pipeline (fullscreen quad for texture viewing)
+  create_debug_2d_pipeline();
+
+  // Light indicator disabled - needs push constants for per-draw transforms
+  // create_light_indicator();
+
 #if 1 // Enable ray tracing
   spdlog::info("RT init check: supports_rt={}", m_device->supports_ray_tracing());
   if (m_device->supports_ray_tracing())
@@ -1350,5 +1863,71 @@ void Application::finalize_setup()
     spdlog::info("Ray tracing enabled");
   }
 #endif
+}
+
+VkInstance Application::vk_instance() const
+{
+  return m_instance->instance();
+}
+
+VkPhysicalDevice Application::vk_physical_device() const
+{
+  return m_device->physicalDevice();
+}
+
+VkDevice Application::vk_device() const
+{
+  return m_device->device();
+}
+
+VkQueue Application::vk_graphics_queue() const
+{
+  return m_device->graphics_queue();
+}
+
+uint32_t Application::graphics_queue_family() const
+{
+  return m_device->m_graphics_queue_family_index;
+}
+
+uint32_t Application::swapchain_image_count() const
+{
+  return static_cast<uint32_t>(m_swapchain->images().size());
+}
+
+GLFWwindow* Application::glfw_window() const
+{
+  return m_window->get();
+}
+
+bool Application::should_close() const
+{
+  return m_window->should_close();
+}
+
+void Application::poll_events()
+{
+  m_window->poll();
+}
+
+void Application::wait_idle()
+{
+  m_device->wait_idle();
+}
+
+void Application::update_frame()
+{
+  process_input();
+  update_uniform_buffer();
+}
+
+void Application::set_vsync(bool enabled)
+{
+  if (m_vsync_enabled != enabled)
+  {
+    m_vsync_enabled = enabled;
+    m_swapchain->set_vsync(enabled);
+    recreate_swapchain();
+  }
 }
 }

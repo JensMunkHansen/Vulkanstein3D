@@ -30,6 +30,12 @@ struct GraphicsPipelineInBundle
   // Depth testing
   bool depthTestEnabled{ false };
   vk::Format depthFormat{ vk::Format::eD32Sfloat };
+
+  // Optional: use existing render pass instead of creating new one
+  vk::RenderPass existingRenderPass{ VK_NULL_HANDLE };
+
+  // Optional: use existing pipeline layout instead of creating new one
+  vk::PipelineLayout existingPipelineLayout{ VK_NULL_HANDLE };
 };
 
 /**

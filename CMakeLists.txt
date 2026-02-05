@@ -20,9 +20,7 @@ endforeach()
 include(CMakeDependentOption)
 
 # Download dependencies through CMake
-if (WIN32)
-  include(cmake/dependencies.cmake)
-endif()
+include(cmake/dependencies.cmake)
 
 project(Vulkanstein3D
   VERSION 1.0

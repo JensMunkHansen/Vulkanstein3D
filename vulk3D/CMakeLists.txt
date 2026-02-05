@@ -45,5 +45,24 @@ add_custom_command(TARGET app POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml
   ${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml)
 
-# file (COPY ${CMAKE_BINARY_DIR}/tmp/somescript.sh DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ)
-# file(REMOVE_RECURSIVE ${CMAKE_BINARY_DIR}/tmp/)
+# ImGui-enabled version
+add_executable(app_imgui main_imgui.cpp)
+
+target_link_libraries(app_imgui
+  PUBLIC
+  engine
+  imgui_impl
+  Vulkan::Headers
+  PRIVATE
+  ${GLFW_STATIC_LIBRARIES}
+)
+if (NOT SPS_VULKAN_DISPATCH_LOADER_DYNAMIC)
+  target_link_libraries(app_imgui
+    PRIVATE
+    ${Vulkan_LIBRARY}
+  )
+endif()
+
+add_custom_command(TARGET app_imgui POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml
+  ${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml)

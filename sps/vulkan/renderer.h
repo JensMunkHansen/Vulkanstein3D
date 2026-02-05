@@ -19,7 +19,7 @@ protected:
   Window::Mode m_window_mode{ Window::Mode::WINDOWED };
   std::string m_window_title;
 
-  bool m_vsync_enabled{ false };
+  bool m_vsync_enabled{ true };
 
   std::unique_ptr<sps::vulkan::Window> m_window;
   std::unique_ptr<sps::vulkan::Instance> m_instance;

@@ -2,9 +2,38 @@ set(TARGET_NAME engine)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  
+
 find_package(spdlog CONFIG)
 
+# Fetch and build ImGui
+FetchContent_MakeAvailable(imgui)
+
+# Fetch cgltf (header-only glTF parser)
+FetchContent_MakeAvailable(cgltf)
+
+# Fetch stb (stb_image for texture loading)
+FetchContent_MakeAvailable(stb)
+
+# Create ImGui library with Vulkan and GLFW backends
+add_library(imgui_impl STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+)
+
+target_include_directories(imgui_impl PUBLIC
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends
+)
+
+target_link_libraries(imgui_impl PUBLIC
+  ${GLFW_STATIC_LIBRARIES}
+  ${Vulkan_LIBRARY}
+)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h @ONLY)
 
@@ -33,6 +62,11 @@ add_library(${TARGET_NAME}
   mesh.cpp
   ply_loader.cpp
   miniply.cpp
+  gltf_loader.cpp
+  texture.cpp
+  ibl.cpp
+  screenshot.cpp
+  command_file.cpp
   acceleration_structure.cpp
   raytracing_pipeline.cpp
   ../tools/cla_parser.cpp
@@ -40,7 +74,9 @@ add_library(${TARGET_NAME}
 
 target_include_directories(${TARGET_NAME}
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../.."
-  PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/../..")
+  PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/../.."
+  PRIVATE "${cgltf_SOURCE_DIR}"
+  PRIVATE "${stb_SOURCE_DIR}")
 
 target_link_libraries(${TARGET_NAME}
   spdlog::spdlog
@@ -48,6 +84,7 @@ target_link_libraries(${TARGET_NAME}
   ${Vulkan_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}
   ${CMAKE_DL_LIBS}
+  imgui_impl
 )
 
 # Enable Vulkan dynamic dispatch for extension functions (ray tracing, etc.)

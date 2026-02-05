@@ -6,6 +6,17 @@ endif()
 set(SHADERS
   fragment.frag
   vertex.vert
+  fragment_normals.frag
+  vertex_normals.vert
+  blinn_phong.frag
+  debug_uv.frag
+  debug_normals.frag
+  debug_basecolor.frag
+  debug_metallic_roughness.frag
+  debug_ao.frag
+  debug_emissive.frag
+  fullscreen_quad.vert
+  debug_texture2d.frag
 )
 
 set(RT_SHADERS

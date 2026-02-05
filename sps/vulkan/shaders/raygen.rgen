@@ -13,6 +13,8 @@ layout(set = 0, binding = 2) uniform CameraUBO {
   vec4 lightAmbient;
   vec4 viewPos;
   vec4 material;
+  vec4 flags;
+  vec4 ibl_params;
 } ubo;
 
 layout(location = 0) rayPayloadEXT vec3 hitValue;

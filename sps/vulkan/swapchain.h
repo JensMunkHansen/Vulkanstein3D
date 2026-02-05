@@ -36,7 +36,7 @@ private:
 
   //  std::unique_ptr<Semaphore> m_img_available;
   [[nodiscard]] std::vector<vk::Image> get_swapchain_images();
-  bool m_vsync_enabled{ false };
+  bool m_vsync_enabled{ true };
 
   std::optional<vk::CompositeAlphaFlagBitsKHR> choose_composite_alpha(
     const vk::CompositeAlphaFlagBitsKHR request_composite_alpha,
@@ -63,6 +63,8 @@ public:
   {
     setup_swapchain(width, height, m_vsync_enabled);
   }
+
+  void set_vsync(bool enabled) { m_vsync_enabled = enabled; }
 
   Swapchain(Device& device, VkSurfaceKHR surface, std::uint32_t width, std::uint32_t height,
     bool vsync_enabled);

@@ -1,5 +1,8 @@
 #pragma once
 #include <sps/vulkan/config.h>
+#include <ctime>
+#include <functional>
+#include <memory>
 #include <string>
 
 #include <sps/vulkan/camera.h>
@@ -7,9 +10,12 @@
 #include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/mesh.h>
 #include <sps/vulkan/renderer.h>
+#include <sps/vulkan/texture.h>
+#include <sps/vulkan/ibl.h>
 #include <sps/vulkan/uniform_buffer.h>
 #include <sps/vulkan/acceleration_structure.h>
 #include <sps/vulkan/raytracing_pipeline.h>
+#include <sps/vulkan/command_registry.h>
 #include <vulkan/vulkan_handles.hpp>
 
 #include <glm/glm.hpp>
@@ -18,6 +24,7 @@ namespace sps::vulkan
 {
 class Fence;
 class Semaphore;
+class CommandRegistry;
 
 /// Uniform buffer object layout (must match shader std140 layout)
 /// Used for both rasterization and ray tracing
@@ -27,11 +34,13 @@ struct UniformBufferObject
   glm::mat4 proj;           // offset 64,  size 64 (raster: projection matrix)
   glm::mat4 viewInverse;    // offset 128, size 64 (RT: camera transform)
   glm::mat4 projInverse;    // offset 192, size 64 (RT: unproject rays)
-  glm::vec4 lightPosition;  // offset 256, size 16 (xyz=dir/pos, w=type)
+  glm::vec4 lightPosition;  // offset 256, size 16 (xyz=dir/pos, w=type: 0=dir, 1=point)
   glm::vec4 lightColor;     // offset 272, size 16 (rgb=color, a=intensity)
   glm::vec4 lightAmbient;   // offset 288, size 16 (rgb=ambient)
   glm::vec4 viewPos;        // offset 304, size 16 (camera position)
-  glm::vec4 material;       // offset 320, size 16 (x=shininess, yzw=unused)
+  glm::vec4 material;       // offset 320, size 16 (x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength)
+  glm::vec4 flags;          // offset 336, size 16 (x=useNormalMap, y=useEmissive, z=useAO, w=exposure)
+  glm::vec4 ibl_params;     // offset 352, size 16 (x=useIBL, y=iblIntensity, z=reserved, w=reserved)
 };
 
 class Application : public VulkanRenderer
@@ -42,11 +51,13 @@ private:
   std::string m_preferred_gpu;  // From TOML: vulkan.preferred_gpu
   std::string m_geometry_source{"triangle"};  // From TOML: application.geometry.source
   std::string m_ply_file;  // From TOML: application.geometry.ply_file
+  std::string m_gltf_file;  // From TOML: application.geometry.gltf_file
 
 public:
   Application(int argc, char* argv[]);
   void run();
   void make_pipeline();
+  void make_pipeline(const std::string& vertex_shader, const std::string& fragment_shader);
   void finalize_setup();
   void recreate_swapchain();
   void record_draw_commands(vk::CommandBuffer, uint32_t imageIndex);
@@ -56,12 +67,82 @@ public:
   void render();
   ~Application();
 
+  // Accessors for external tools (ImGui, etc.)
+  [[nodiscard]] VkInstance vk_instance() const;
+  [[nodiscard]] VkPhysicalDevice vk_physical_device() const;
+  [[nodiscard]] VkDevice vk_device() const;
+  [[nodiscard]] VkQueue vk_graphics_queue() const;
+  [[nodiscard]] uint32_t graphics_queue_family() const;
+  [[nodiscard]] VkRenderPass vk_renderpass() const { return m_renderpass; }
+  [[nodiscard]] VkCommandPool vk_command_pool() const { return m_commandPool; }
+  [[nodiscard]] uint32_t swapchain_image_count() const;
+  [[nodiscard]] GLFWwindow* glfw_window() const;
+  [[nodiscard]] bool should_close() const;
+  void poll_events();
+  void wait_idle();
+  void update_frame();  // Call process_input + update_uniform_buffer
+
+  // Mutable accessors for UI controls
+  Light& light() { return *m_light; }
+  float& shininess() { return m_shininess; }
+  float& specular_strength() { return m_specularStrength; }
+  float& metallic_ambient() { return m_metallicAmbient; }
+  float& ao_strength() { return m_aoStrength; }
+  float& exposure() { return m_exposure; }
+  bool& use_raytracing() { return m_use_raytracing; }
+  bool& use_normal_mapping() { return m_use_normal_mapping; }
+  bool& use_emissive() { return m_use_emissive; }
+  bool& use_ao() { return m_use_ao; }
+  bool& use_ibl() { return m_use_ibl; }
+  float ibl_intensity() const { return m_ibl ? m_ibl->intensity() : 1.0f; }
+  void set_ibl_intensity(float v) { if (m_ibl) m_ibl->set_intensity(v); }
+  bool& show_light_indicator() { return m_show_light_indicator; }
+  Camera& camera() { return m_camera; }
+  bool vsync_enabled() const { return m_vsync_enabled; }
+  void set_vsync(bool enabled);
+
+  // Shader management
+  const std::string& current_vertex_shader() const { return m_vertex_shader_path; }
+  const std::string& current_fragment_shader() const { return m_fragment_shader_path; }
+  void reload_shaders(const std::string& vertex_shader, const std::string& fragment_shader);
+
+  // Available shader modes for UI (must match main_imgui.cpp)
+  static constexpr int shader_mode_count = 8;
+  int& current_shader_mode() { return m_current_shader_mode; }
+  void apply_shader_mode(int mode);
+
+  // Screenshot
+  bool save_screenshot(const std::string& filepath);
+  bool save_screenshot();  // Auto-generate filename
+
+  // 2D Debug mode
+  bool& debug_2d_mode() { return m_debug_2d_mode; }
+  int& debug_texture_index() { return m_debug_texture_index; }  // 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao
+  int& debug_channel_mode() { return m_debug_channel_mode; }    // 0=RGB, 1=R, 2=G, 3=B, 4=A
+  float& debug_2d_zoom() { return m_debug_2d_zoom; }
+  glm::vec2& debug_2d_pan() { return m_debug_2d_pan; }
+  void reset_debug_2d_view() { m_debug_2d_zoom = 1.0f; m_debug_2d_pan = glm::vec2(0.0f); }
+  static constexpr const char* texture_names[] = { "Base Color", "Normal", "Metal/Rough", "Emissive", "AO" };
+  static constexpr const char* channel_names[] = { "RGB", "R", "G", "B", "A" };
+
+  // Call after ImGui to sync uniforms before render
+  void sync_uniforms() { update_uniform_buffer(); }
+
+  // Command file for remote control
+  void poll_commands();
+
+  // Callback for injecting UI rendering (called during render pass, before endRenderPass)
+  using RenderCallback = std::function<void(vk::CommandBuffer)>;
+  void set_ui_render_callback(RenderCallback callback) { m_ui_render_callback = std::move(callback); }
+
 private:
   void setup_camera();
   void create_default_mesh();
   void create_depth_resources();
   void create_uniform_buffer();
   void create_descriptor();
+  void create_debug_2d_pipeline();
+  void create_light_indicator();
 
   // Ray tracing setup
   void create_rt_storage_image();
@@ -89,6 +170,10 @@ private:
   vk::RenderPass m_renderpass;
   vk::Pipeline m_pipeline;
 
+  // 2D debug pipeline (fullscreen quad)
+  vk::Pipeline m_debug_2d_pipeline;
+  vk::PipelineLayout m_debug_2d_pipelineLayout;
+
   // Depth buffer
   vk::Image m_depthImage;
   vk::DeviceMemory m_depthImageMemory;
@@ -106,6 +191,25 @@ private:
 
   // Mesh
   std::unique_ptr<Mesh> m_mesh;
+
+  // Light indicator (procedural sphere for visualizing point light position)
+  std::unique_ptr<Mesh> m_light_indicator_mesh;
+  bool m_show_light_indicator{ true };
+
+  // Textures
+  std::unique_ptr<Texture> m_baseColorTexture;           // From glTF or nullptr
+  std::unique_ptr<Texture> m_normalTexture;              // From glTF or nullptr
+  std::unique_ptr<Texture> m_metallicRoughnessTexture;   // From glTF or nullptr (G=roughness, B=metallic)
+  std::unique_ptr<Texture> m_emissiveTexture;            // From glTF or nullptr (RGB glow)
+  std::unique_ptr<Texture> m_aoTexture;                  // From glTF or nullptr (R channel)
+  std::unique_ptr<Texture> m_defaultTexture;             // 1x1 white fallback
+  std::unique_ptr<Texture> m_defaultNormalTexture;       // 1x1 flat normal fallback
+  std::unique_ptr<Texture> m_defaultMetallicRoughness;   // 1x1 default (metallic=0, roughness=0.5)
+  std::unique_ptr<Texture> m_defaultEmissive;            // 1x1 black (no emission)
+  std::unique_ptr<Texture> m_defaultAO;                  // 1x1 white (no occlusion)
+
+  // IBL (Image-Based Lighting)
+  std::unique_ptr<IBL> m_ibl;
 
   // Uniform buffer (using wrapper)
   std::unique_ptr<UniformBuffer<UniformBufferObject>> m_uniform_buffer;
@@ -132,6 +236,9 @@ private:
   std::unique_ptr<Light> m_light;
   float m_shininess{ 32.0f };
   float m_specularStrength{ 0.4f };
+  float m_metallicAmbient{ 0.3f };  // Fake IBL strength for metals (0-1)
+  float m_aoStrength{ 1.0f };       // AO influence (0-1)
+  float m_exposure{ 1.0f };         // Exposure/brightness multiplier
 
   // Input state
   bool m_keys[512] = { false };
@@ -140,7 +247,31 @@ private:
   bool m_firstMouse = true;
   bool m_mousePressed = false;
 
-  // Rendering mode toggle (R key to switch)
-  bool m_use_raytracing = false;  // Start with rasterization
+  // Rendering mode toggles
+  bool m_use_raytracing = false;  // Start with rasterization (R key to switch)
+  bool m_use_normal_mapping = true;  // Normal mapping enabled by default
+  bool m_use_emissive = true;     // Emissive texture enabled by default
+  bool m_use_ao = true;           // Ambient occlusion enabled by default
+  bool m_use_ibl = false;         // IBL disabled by default (use direct lighting)
+  int m_current_shader_mode = 0;  // Index into shader_modes[]
+
+  // 2D Debug mode
+  bool m_debug_2d_mode = false;
+  int m_debug_texture_index = 0;  // Which texture to display
+  int m_debug_channel_mode = 0;   // Which channel(s) to display
+  float m_debug_2d_zoom = 1.0f;   // Zoom level (1.0 = 100%)
+  glm::vec2 m_debug_2d_pan = glm::vec2(0.0f);  // Pan offset
+
+  // UI render callback (for ImGui etc.)
+  RenderCallback m_ui_render_callback;
+
+  // Command file remote control
+  std::unique_ptr<CommandRegistry> m_command_registry;
+  std::string m_command_file_path{ "./commands.txt" };
+  time_t m_command_file_mtime{ 0 };
+
+  // Current shader paths
+  std::string m_vertex_shader_path;
+  std::string m_fragment_shader_path;
 };
 }
