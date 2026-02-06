@@ -29,13 +29,20 @@ struct GraphicsPipelineInBundle
 
   // Depth testing
   bool depthTestEnabled{ false };
+  bool depthWriteEnabled{ true };
   vk::Format depthFormat{ vk::Format::eD32Sfloat };
+
+  // Blending
+  bool blendEnabled{ false };
 
   // Optional: use existing render pass instead of creating new one
   vk::RenderPass existingRenderPass{ VK_NULL_HANDLE };
 
   // Optional: use existing pipeline layout instead of creating new one
   vk::PipelineLayout existingPipelineLayout{ VK_NULL_HANDLE };
+
+  // Push constant ranges
+  std::vector<vk::PushConstantRange> pushConstantRanges;
 };
 
 /**
@@ -49,7 +56,9 @@ struct GraphicsPipelineOutBundle
   vk::Pipeline pipeline;
 };
 
-vk::PipelineLayout make_pipeline_layout(vk::Device device, bool debug);
+vk::PipelineLayout make_pipeline_layout(vk::Device device,
+  vk::DescriptorSetLayout descriptorSetLayout,
+  const std::vector<vk::PushConstantRange>& pushConstantRanges, bool debug);
 
 vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageFormat, bool debug);
 

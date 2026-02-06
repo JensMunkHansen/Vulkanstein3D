@@ -1,0 +1,14 @@
+data/footprint_court.hdr filter=lfs diff=lfs merge=lfs -text
+data/lightroom_14b.hdr filter=lfs diff=lfs merge=lfs -text
+data/neutral.hdr filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/LICENSE.md filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/metadata.json filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/README.body.md filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/README.md filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/screenshot filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/GLB filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/glTF filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/glTF-Binary filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/glTF-JPG filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/glTF-KTX-BasisU-Draco filter=lfs diff=lfs merge=lfs -text
+data/CarConcept/glTF-WEBP filter=lfs diff=lfs merge=lfs -text

@@ -23,6 +23,14 @@ layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in vec4 inTangent;  // xyz=tangent, w=handedness
 
+// Push constant for per-draw material properties
+layout(push_constant) uniform PushConstants {
+  mat4 model;            // 64 bytes (vertex stage)
+  vec4 baseColorFactor;  // 16 bytes (fragment stage)
+  float alphaCutoff;     //  4 bytes (fragment stage)
+  uint alphaMode;        //  4 bytes (fragment stage) 0=OPAQUE, 1=MASK, 2=BLEND
+} pc;
+
 // Outputs to fragment shader
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec3 fragNormal;
@@ -32,18 +40,22 @@ layout(location = 4) out mat3 fragTBN;  // Tangent-Bitangent-Normal matrix
 
 void main()
 {
-  // World position (vertices are in world space, no model transform)
-  fragPos = inPosition;
+  // World position via model matrix
+  vec4 worldPos = pc.model * vec4(inPosition, 1.0);
+  fragPos = worldPos.xyz;
 
-  gl_Position = ubo.proj * ubo.view * vec4(inPosition, 1.0);
+  gl_Position = ubo.proj * ubo.view * worldPos;
   fragColor = inColor;
-  fragNormal = inNormal;
   fragTexCoord = inTexCoord;
+
+  // Transform normal and tangent by model matrix (upper 3x3)
+  mat3 normalMatrix = mat3(pc.model);
+  fragNormal = normalize(normalMatrix * inNormal);
 
   // Compute TBN matrix for normal mapping
   // Reference: https://learnopengl.com/Advanced-Lighting/Normal-Mapping
-  vec3 T = normalize(inTangent.xyz);
-  vec3 N = normalize(inNormal);
+  vec3 T = normalize(normalMatrix * inTangent.xyz);
+  vec3 N = fragNormal;
   // Re-orthogonalize T with respect to N (Gram-Schmidt)
   T = normalize(T - dot(T, N) * N);
   // Bitangent: cross product with handedness from tangent.w

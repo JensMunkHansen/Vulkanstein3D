@@ -7,11 +7,21 @@
 namespace sps::vulkan
 {
 vk::PipelineLayout make_pipeline_layout(
-  vk::Device device, vk::DescriptorSetLayout descriptorSetLayout, bool debug)
+  vk::Device device, vk::DescriptorSetLayout descriptorSetLayout,
+  const std::vector<vk::PushConstantRange>& pushConstantRanges, bool debug)
 {
   vk::PipelineLayoutCreateInfo layoutInfo;
   layoutInfo.flags = vk::PipelineLayoutCreateFlags();
-  layoutInfo.pushConstantRangeCount = 0;
+
+  if (!pushConstantRanges.empty())
+  {
+    layoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushConstantRanges.size());
+    layoutInfo.pPushConstantRanges = pushConstantRanges.data();
+  }
+  else
+  {
+    layoutInfo.pushConstantRangeCount = 0;
+  }
 
   if (descriptorSetLayout)
   {
@@ -229,7 +239,7 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   // Depth Stencil
   vk::PipelineDepthStencilStateCreateInfo depthStencil = {};
   depthStencil.depthTestEnable = specification.depthTestEnabled ? VK_TRUE : VK_FALSE;
-  depthStencil.depthWriteEnable = specification.depthTestEnabled ? VK_TRUE : VK_FALSE;
+  depthStencil.depthWriteEnable = (specification.depthTestEnabled && specification.depthWriteEnabled) ? VK_TRUE : VK_FALSE;
   depthStencil.depthCompareOp = vk::CompareOp::eLess;
   depthStencil.depthBoundsTestEnable = VK_FALSE;
   depthStencil.stencilTestEnable = VK_FALSE;
@@ -240,7 +250,22 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   colorBlendAttachment.colorWriteMask = vk::ColorComponentFlagBits::eR |
     vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB |
     vk::ColorComponentFlagBits::eA;
-  colorBlendAttachment.blendEnable = VK_FALSE;
+  if (specification.blendEnabled)
+  {
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    // RGB: SRC_ALPHA / ONE_MINUS_SRC_ALPHA / ADD (matches Khronos Sample-Viewer)
+    colorBlendAttachment.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+    colorBlendAttachment.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    colorBlendAttachment.colorBlendOp = vk::BlendOp::eAdd;
+    // Alpha: ONE / ONE_MINUS_SRC_ALPHA / ADD
+    colorBlendAttachment.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+    colorBlendAttachment.dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    colorBlendAttachment.alphaBlendOp = vk::BlendOp::eAdd;
+  }
+  else
+  {
+    colorBlendAttachment.blendEnable = VK_FALSE;
+  }
   vk::PipelineColorBlendStateCreateInfo colorBlending = {};
   colorBlending.flags = vk::PipelineColorBlendStateCreateFlags();
   colorBlending.logicOpEnable = VK_FALSE;
@@ -270,7 +295,8 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
       std::cout << "Create Pipeline Layout" << std::endl;
     }
     pipelineLayout =
-      make_pipeline_layout(specification.device, specification.descriptorSetLayout, debug);
+      make_pipeline_layout(specification.device, specification.descriptorSetLayout,
+        specification.pushConstantRanges, debug);
   }
   pipelineInfo.layout = pipelineLayout;
 

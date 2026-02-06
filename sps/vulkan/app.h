@@ -1,21 +1,23 @@
 #pragma once
-#include <sps/vulkan/config.h>
 #include <ctime>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <sps/vulkan/config.h>
 #include <string>
 
+#include <sps/vulkan/acceleration_structure.h>
 #include <sps/vulkan/camera.h>
-#include <sps/vulkan/light.h>
+#include <sps/vulkan/command_registry.h>
 #include <sps/vulkan/descriptor_builder.h>
+#include <sps/vulkan/gltf_loader.h>
+#include <sps/vulkan/ibl.h>
+#include <sps/vulkan/light.h>
 #include <sps/vulkan/mesh.h>
+#include <sps/vulkan/raytracing_pipeline.h>
 #include <sps/vulkan/renderer.h>
 #include <sps/vulkan/texture.h>
-#include <sps/vulkan/ibl.h>
 #include <sps/vulkan/uniform_buffer.h>
-#include <sps/vulkan/acceleration_structure.h>
-#include <sps/vulkan/raytracing_pipeline.h>
-#include <sps/vulkan/command_registry.h>
 #include <vulkan/vulkan_handles.hpp>
 
 #include <glm/glm.hpp>
@@ -30,17 +32,18 @@ class CommandRegistry;
 /// Used for both rasterization and ray tracing
 struct UniformBufferObject
 {
-  glm::mat4 view;           // offset 0,   size 64 (raster: view matrix)
-  glm::mat4 proj;           // offset 64,  size 64 (raster: projection matrix)
-  glm::mat4 viewInverse;    // offset 128, size 64 (RT: camera transform)
-  glm::mat4 projInverse;    // offset 192, size 64 (RT: unproject rays)
-  glm::vec4 lightPosition;  // offset 256, size 16 (xyz=dir/pos, w=type: 0=dir, 1=point)
-  glm::vec4 lightColor;     // offset 272, size 16 (rgb=color, a=intensity)
-  glm::vec4 lightAmbient;   // offset 288, size 16 (rgb=ambient)
-  glm::vec4 viewPos;        // offset 304, size 16 (camera position)
-  glm::vec4 material;       // offset 320, size 16 (x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength)
-  glm::vec4 flags;          // offset 336, size 16 (x=useNormalMap, y=useEmissive, z=useAO, w=exposure)
-  glm::vec4 ibl_params;     // offset 352, size 16 (x=useIBL, y=iblIntensity, z=reserved, w=reserved)
+  glm::mat4 view;          // offset 0,   size 64 (raster: view matrix)
+  glm::mat4 proj;          // offset 64,  size 64 (raster: projection matrix)
+  glm::mat4 viewInverse;   // offset 128, size 64 (RT: camera transform)
+  glm::mat4 projInverse;   // offset 192, size 64 (RT: unproject rays)
+  glm::vec4 lightPosition; // offset 256, size 16 (xyz=dir/pos, w=type: 0=dir, 1=point)
+  glm::vec4 lightColor;    // offset 272, size 16 (rgb=color, a=intensity)
+  glm::vec4 lightAmbient;  // offset 288, size 16 (rgb=ambient)
+  glm::vec4 viewPos;       // offset 304, size 16 (camera position)
+  glm::vec4
+    material; // offset 320, size 16 (x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength)
+  glm::vec4 flags;      // offset 336, size 16 (x=useNormalMap, y=useEmissive, z=useAO, w=exposure)
+  glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=reserved, w=reserved)
 };
 
 class Application : public VulkanRenderer
@@ -81,7 +84,7 @@ public:
   [[nodiscard]] bool should_close() const;
   void poll_events();
   void wait_idle();
-  void update_frame();  // Call process_input + update_uniform_buffer
+  void update_frame(); // Call process_input + update_uniform_buffer
 
   // Mutable accessors for UI controls
   Light& light() { return *m_light; }
@@ -96,9 +99,14 @@ public:
   bool& use_ao() { return m_use_ao; }
   bool& use_ibl() { return m_use_ibl; }
   float ibl_intensity() const { return m_ibl ? m_ibl->intensity() : 1.0f; }
-  void set_ibl_intensity(float v) { if (m_ibl) m_ibl->set_intensity(v); }
+  void set_ibl_intensity(float v)
+  {
+    if (m_ibl)
+      m_ibl->set_intensity(v);
+  }
   int& tonemap_mode() { return m_tonemap_mode; }
-  static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)", "ACES + Boost", "Khronos PBR Neutral" };
+  static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)",
+    "ACES + Boost", "Khronos PBR Neutral" };
   bool& show_light_indicator() { return m_show_light_indicator; }
   Camera& camera() { return m_camera; }
   bool vsync_enabled() const { return m_vsync_enabled; }
@@ -116,16 +124,24 @@ public:
 
   // Screenshot
   bool save_screenshot(const std::string& filepath);
-  bool save_screenshot();  // Auto-generate filename
+  bool save_screenshot(); // Auto-generate filename
 
   // 2D Debug mode
   bool& debug_2d_mode() { return m_debug_2d_mode; }
-  int& debug_texture_index() { return m_debug_texture_index; }  // 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao
-  int& debug_channel_mode() { return m_debug_channel_mode; }    // 0=RGB, 1=R, 2=G, 3=B, 4=A
+  int& debug_texture_index()
+  {
+    return m_debug_texture_index;
+  } // 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao
+  int& debug_channel_mode() { return m_debug_channel_mode; } // 0=RGB, 1=R, 2=G, 3=B, 4=A
   float& debug_2d_zoom() { return m_debug_2d_zoom; }
   glm::vec2& debug_2d_pan() { return m_debug_2d_pan; }
-  void reset_debug_2d_view() { m_debug_2d_zoom = 1.0f; m_debug_2d_pan = glm::vec2(0.0f); }
-  static constexpr const char* texture_names[] = { "Base Color", "Normal", "Metal/Rough", "Emissive", "AO" };
+  void reset_debug_2d_view()
+  {
+    m_debug_2d_zoom = 1.0f;
+    m_debug_2d_pan = glm::vec2(0.0f);
+  }
+  static constexpr const char* texture_names[] = { "Base Color", "Normal", "Metal/Rough",
+    "Emissive", "AO" };
   static constexpr const char* channel_names[] = { "RGB", "R", "G", "B", "A" };
 
   // Call after ImGui to sync uniforms before render
@@ -136,7 +152,10 @@ public:
 
   // Callback for injecting UI rendering (called during render pass, before endRenderPass)
   using RenderCallback = std::function<void(vk::CommandBuffer)>;
-  void set_ui_render_callback(RenderCallback callback) { m_ui_render_callback = std::move(callback); }
+  void set_ui_render_callback(RenderCallback callback)
+  {
+    m_ui_render_callback = std::move(callback);
+  }
 
 private:
   void setup_camera();
@@ -172,6 +191,7 @@ private:
   vk::PipelineLayout m_pipelineLayout;
   vk::RenderPass m_renderpass;
   vk::Pipeline m_pipeline;
+  vk::Pipeline m_blend_pipeline; // blend on, depth write off
 
   // 2D debug pipeline (fullscreen quad)
   vk::Pipeline m_debug_2d_pipeline;
@@ -200,16 +220,17 @@ private:
   bool m_show_light_indicator{ true };
 
   // Textures
-  std::unique_ptr<Texture> m_baseColorTexture;           // From glTF or nullptr
-  std::unique_ptr<Texture> m_normalTexture;              // From glTF or nullptr
-  std::unique_ptr<Texture> m_metallicRoughnessTexture;   // From glTF or nullptr (G=roughness, B=metallic)
-  std::unique_ptr<Texture> m_emissiveTexture;            // From glTF or nullptr (RGB glow)
-  std::unique_ptr<Texture> m_aoTexture;                  // From glTF or nullptr (R channel)
-  std::unique_ptr<Texture> m_defaultTexture;             // 1x1 white fallback
-  std::unique_ptr<Texture> m_defaultNormalTexture;       // 1x1 flat normal fallback
-  std::unique_ptr<Texture> m_defaultMetallicRoughness;   // 1x1 default (metallic=0, roughness=0.5)
-  std::unique_ptr<Texture> m_defaultEmissive;            // 1x1 black (no emission)
-  std::unique_ptr<Texture> m_defaultAO;                  // 1x1 white (no occlusion)
+  std::unique_ptr<Texture> m_baseColorTexture; // From glTF or nullptr
+  std::unique_ptr<Texture> m_normalTexture;    // From glTF or nullptr
+  std::unique_ptr<Texture>
+    m_metallicRoughnessTexture;                    // From glTF or nullptr (G=roughness, B=metallic)
+  std::unique_ptr<Texture> m_emissiveTexture;      // From glTF or nullptr (RGB glow)
+  std::unique_ptr<Texture> m_aoTexture;            // From glTF or nullptr (R channel)
+  std::unique_ptr<Texture> m_defaultTexture;       // 1x1 white fallback
+  std::unique_ptr<Texture> m_defaultNormalTexture; // 1x1 flat normal fallback
+  std::unique_ptr<Texture> m_defaultMetallicRoughness; // 1x1 default (metallic=0, roughness=0.5)
+  std::unique_ptr<Texture> m_defaultEmissive;          // 1x1 black (no emission)
+  std::unique_ptr<Texture> m_defaultAO;                // 1x1 white (no occlusion)
 
   // IBL (Image-Based Lighting)
   std::unique_ptr<IBL> m_ibl;
@@ -219,6 +240,10 @@ private:
 
   // Descriptor (using wrapper)
   std::unique_ptr<ResourceDescriptor> m_descriptor;
+
+  // Scene graph (multi-material)
+  std::optional<GltfScene> m_scene;
+  std::vector<std::unique_ptr<ResourceDescriptor>> m_material_descriptors;
 
   // Ray tracing resources
   std::unique_ptr<AccelerationStructure> m_blas;
@@ -239,9 +264,9 @@ private:
   std::unique_ptr<Light> m_light;
   float m_shininess{ 32.0f };
   float m_specularStrength{ 0.4f };
-  float m_metallicAmbient{ 0.3f };  // Fake IBL strength for metals (0-1)
-  float m_aoStrength{ 1.0f };       // AO influence (0-1)
-  float m_exposure{ 1.0f };         // Exposure/brightness multiplier
+  float m_metallicAmbient{ 0.3f }; // Fake IBL strength for metals (0-1)
+  float m_aoStrength{ 1.0f };      // AO influence (0-1)
+  float m_exposure{ 1.0f };        // Exposure/brightness multiplier
 
   // Input state
   bool m_keys[512] = { false };
@@ -251,20 +276,21 @@ private:
   bool m_mousePressed = false;
 
   // Rendering mode toggles
-  bool m_use_raytracing = false;  // Start with rasterization (R key to switch)
-  bool m_use_normal_mapping = true;  // Normal mapping enabled by default
-  bool m_use_emissive = true;     // Emissive texture enabled by default
-  bool m_use_ao = true;           // Ambient occlusion enabled by default
-  bool m_use_ibl = false;         // IBL disabled by default (use direct lighting)
-  int m_tonemap_mode = 5;         // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR
-  int m_current_shader_mode = 0;  // Index into shader_modes[]
+  bool m_use_raytracing = false;    // Start with rasterization (R key to switch)
+  bool m_use_normal_mapping = true; // Normal mapping enabled by default
+  bool m_use_emissive = true;       // Emissive texture enabled by default
+  bool m_use_ao = true;             // Ambient occlusion enabled by default
+  bool m_use_ibl = false;           // IBL disabled by default (use direct lighting)
+  int m_tonemap_mode =
+    5; // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR
+  int m_current_shader_mode = 0; // Index into shader_modes[]
 
   // 2D Debug mode
   bool m_debug_2d_mode = false;
-  int m_debug_texture_index = 0;  // Which texture to display
-  int m_debug_channel_mode = 0;   // Which channel(s) to display
-  float m_debug_2d_zoom = 1.0f;   // Zoom level (1.0 = 100%)
-  glm::vec2 m_debug_2d_pan = glm::vec2(0.0f);  // Pan offset
+  int m_debug_texture_index = 0;              // Which texture to display
+  int m_debug_channel_mode = 0;               // Which channel(s) to display
+  float m_debug_2d_zoom = 1.0f;               // Zoom level (1.0 = 100%)
+  glm::vec2 m_debug_2d_pan = glm::vec2(0.0f); // Pan offset
 
   // UI render callback (for ImGui etc.)
   RenderCallback m_ui_render_callback;

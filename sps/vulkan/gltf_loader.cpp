@@ -9,6 +9,7 @@
 #include <spdlog/spdlog.h>
 
 #include <filesystem>
+#include <unordered_map>
 
 namespace sps::vulkan
 {
@@ -878,6 +879,412 @@ GltfModel load_gltf_model(const Device& device, const std::string& filepath)
   model.mesh = load_gltf(device, filepath);
 
   return model;
+}
+
+namespace
+{
+
+/// @brief Generic texture extraction from a cgltf_texture_view.
+/// Works for any texture slot (base color, normal, metallic/roughness, emissive, AO).
+std::unique_ptr<Texture> extract_texture(
+  const cgltf_texture_view& tex_view, const Device& device,
+  const std::filesystem::path& base_path, const std::string& slot_name)
+{
+  if (!tex_view.texture || !tex_view.texture->image)
+  {
+    return nullptr;
+  }
+
+  const cgltf_image* image = tex_view.texture->image;
+
+  if (image->buffer_view)
+  {
+    const cgltf_buffer_view* buffer_view = image->buffer_view;
+    const uint8_t* buffer_data =
+      static_cast<const uint8_t*>(buffer_view->buffer->data) + buffer_view->offset;
+    size_t buffer_size = buffer_view->size;
+
+    int width, height, channels;
+    stbi_uc* pixels =
+      stbi_load_from_memory(buffer_data, static_cast<int>(buffer_size), &width, &height,
+        &channels, STBI_rgb_alpha);
+
+    if (!pixels)
+    {
+      spdlog::warn("Failed to decode embedded {} texture", slot_name);
+      return nullptr;
+    }
+
+    std::string tex_name = image->name ? image->name : ("embedded_" + slot_name);
+    auto tex = std::make_unique<Texture>(device, tex_name, pixels,
+      static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+
+    stbi_image_free(pixels);
+
+    spdlog::info("Loaded embedded {} texture: {} ({}x{})", slot_name, tex_name, width, height);
+    return tex;
+  }
+  else if (image->uri)
+  {
+    std::string uri = image->uri;
+
+    if (uri.rfind("data:", 0) == 0)
+    {
+      spdlog::warn("Data URI textures not supported yet");
+      return nullptr;
+    }
+
+    std::filesystem::path tex_path = base_path / uri;
+
+    if (!std::filesystem::exists(tex_path))
+    {
+      spdlog::warn("{} texture file not found: {}", slot_name, tex_path.string());
+      return nullptr;
+    }
+
+    std::string tex_name = image->name ? image->name : tex_path.stem().string();
+
+    try
+    {
+      auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string());
+      spdlog::info("Loaded {} texture: {} from {}", slot_name, tex_name, tex_path.string());
+      return tex;
+    }
+    catch (const std::exception& e)
+    {
+      spdlog::warn("Failed to load {} texture {}: {}", slot_name, tex_path.string(), e.what());
+      return nullptr;
+    }
+  }
+
+  return nullptr;
+}
+
+/// @brief Recursively traverse glTF node tree, extracting primitives with world transforms.
+void traverse_nodes(
+  const cgltf_node* node,
+  const cgltf_data* data,
+  const Device& device,
+  const std::filesystem::path& base_path,
+  std::vector<Vertex>& all_vertices,
+  std::vector<uint32_t>& all_indices,
+  std::vector<ScenePrimitive>& primitives,
+  std::vector<SceneMaterial>& materials,
+  std::unordered_map<const cgltf_material*, uint32_t>& material_map)
+{
+  // Compute world transform for this node
+  float m[16];
+  cgltf_node_transform_world(node, m);
+  // cgltf outputs column-major, same as glm
+  glm::mat4 model_matrix(
+    m[0], m[1], m[2], m[3],
+    m[4], m[5], m[6], m[7],
+    m[8], m[9], m[10], m[11],
+    m[12], m[13], m[14], m[15]);
+
+  if (node->mesh)
+  {
+    const cgltf_mesh& mesh = *node->mesh;
+
+    for (size_t prim_idx = 0; prim_idx < mesh.primitives_count; ++prim_idx)
+    {
+      const cgltf_primitive& primitive = mesh.primitives[prim_idx];
+
+      if (primitive.type != cgltf_primitive_type_triangles)
+      {
+        spdlog::warn("Skipping non-triangle primitive");
+        continue;
+      }
+
+      // Resolve material index
+      uint32_t mat_index = 0;
+      if (primitive.material)
+      {
+        auto it = material_map.find(primitive.material);
+        if (it == material_map.end())
+        {
+          // New material - extract textures
+          mat_index = static_cast<uint32_t>(materials.size());
+          material_map[primitive.material] = mat_index;
+
+          SceneMaterial scene_mat;
+          if (primitive.material->has_pbr_metallic_roughness)
+          {
+            scene_mat.baseColorTexture = extract_texture(
+              primitive.material->pbr_metallic_roughness.base_color_texture,
+              device, base_path, "baseColor");
+            scene_mat.metallicRoughnessTexture = extract_texture(
+              primitive.material->pbr_metallic_roughness.metallic_roughness_texture,
+              device, base_path, "metallicRoughness");
+          }
+          scene_mat.normalTexture = extract_texture(
+            primitive.material->normal_texture, device, base_path, "normal");
+          scene_mat.emissiveTexture = extract_texture(
+            primitive.material->emissive_texture, device, base_path, "emissive");
+          scene_mat.aoTexture = extract_texture(
+            primitive.material->occlusion_texture, device, base_path, "ao");
+
+          // Extract material scalar properties
+          if (primitive.material->has_pbr_metallic_roughness)
+          {
+            const auto& bcf = primitive.material->pbr_metallic_roughness.base_color_factor;
+            scene_mat.baseColorFactor = glm::vec4(bcf[0], bcf[1], bcf[2], bcf[3]);
+          }
+          switch (primitive.material->alpha_mode)
+          {
+            case cgltf_alpha_mode_mask:
+              scene_mat.alphaMode = AlphaMode::Mask;
+              break;
+            case cgltf_alpha_mode_blend:
+              scene_mat.alphaMode = AlphaMode::Blend;
+              break;
+            default:
+              scene_mat.alphaMode = AlphaMode::Opaque;
+              break;
+          }
+          scene_mat.alphaCutoff = primitive.material->alpha_cutoff;
+          scene_mat.doubleSided = primitive.material->double_sided;
+
+          // HACK: Approximate KHR_materials_transmission as alpha blend.
+          // Proper transmission requires a separate render pass that samples
+          // the opaque scene behind the transmissive surface (future: glass stage).
+          if (primitive.material->has_transmission &&
+              scene_mat.alphaMode == AlphaMode::Opaque)
+          {
+            float t = primitive.material->transmission.transmission_factor;
+            if (t > 0.0f)
+            {
+              scene_mat.alphaMode = AlphaMode::Blend;
+              scene_mat.baseColorFactor.a = 1.0f - t;
+            }
+          }
+
+          materials.push_back(std::move(scene_mat));
+        }
+        else
+        {
+          mat_index = it->second;
+        }
+      }
+      else
+      {
+        // No material assigned - ensure we have a default (index 0)
+        if (material_map.find(nullptr) == material_map.end())
+        {
+          material_map[nullptr] = static_cast<uint32_t>(materials.size());
+          materials.emplace_back(); // empty SceneMaterial (all nullptr textures)
+        }
+        mat_index = material_map[nullptr];
+      }
+
+      // Find accessors
+      const cgltf_accessor* position_accessor = nullptr;
+      const cgltf_accessor* normal_accessor = nullptr;
+      const cgltf_accessor* texcoord_accessor = nullptr;
+      const cgltf_accessor* color_accessor = nullptr;
+      const cgltf_accessor* tangent_accessor = nullptr;
+
+      for (size_t attr_idx = 0; attr_idx < primitive.attributes_count; ++attr_idx)
+      {
+        const cgltf_attribute& attr = primitive.attributes[attr_idx];
+        switch (attr.type)
+        {
+          case cgltf_attribute_type_position:
+            position_accessor = attr.data;
+            break;
+          case cgltf_attribute_type_normal:
+            normal_accessor = attr.data;
+            break;
+          case cgltf_attribute_type_texcoord:
+            if (attr.index == 0) texcoord_accessor = attr.data;
+            break;
+          case cgltf_attribute_type_color:
+            if (attr.index == 0) color_accessor = attr.data;
+            break;
+          case cgltf_attribute_type_tangent:
+            tangent_accessor = attr.data;
+            break;
+          default:
+            break;
+        }
+      }
+
+      if (!position_accessor)
+      {
+        spdlog::warn("Primitive missing positions, skipping");
+        continue;
+      }
+
+      // Read vertex data
+      std::vector<float> positions, normals, texcoords, colors, tangents;
+      read_accessor_data(position_accessor, positions, 3);
+      if (normal_accessor) read_accessor_data(normal_accessor, normals, 3);
+      if (texcoord_accessor) read_accessor_data(texcoord_accessor, texcoords, 2);
+      if (color_accessor)
+      {
+        size_t cc = (color_accessor->type == cgltf_type_vec4) ? 4 : 3;
+        read_accessor_data(color_accessor, colors, cc);
+      }
+      if (tangent_accessor) read_accessor_data(tangent_accessor, tangents, 4);
+
+      // Record vertex offset for this primitive
+      int32_t vertex_offset = static_cast<int32_t>(all_vertices.size());
+      size_t num_verts = position_accessor->count;
+
+      for (size_t i = 0; i < num_verts; ++i)
+      {
+        Vertex v;
+        v.position = glm::vec3(positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]);
+
+        if (!normals.empty())
+          v.normal = glm::vec3(normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]);
+        else
+          v.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+
+        if (!texcoords.empty())
+          v.texCoord = glm::vec2(texcoords[i * 2 + 0], texcoords[i * 2 + 1]);
+        else
+          v.texCoord = glm::vec2(0.0f);
+
+        if (!colors.empty())
+        {
+          size_t cc = (color_accessor->type == cgltf_type_vec4) ? 4 : 3;
+          v.color = glm::vec3(colors[i * cc + 0], colors[i * cc + 1], colors[i * cc + 2]);
+        }
+        else
+          v.color = glm::vec3(1.0f);
+
+        if (!tangents.empty())
+          v.tangent = glm::vec4(tangents[i * 4 + 0], tangents[i * 4 + 1],
+                                tangents[i * 4 + 2], tangents[i * 4 + 3]);
+        else
+          v.tangent = glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+
+        all_vertices.push_back(v);
+      }
+
+      // Read indices (raw, not offset - we use vertexOffset in drawIndexed)
+      uint32_t first_index = static_cast<uint32_t>(all_indices.size());
+      uint32_t index_count = 0;
+
+      if (primitive.indices)
+      {
+        std::vector<uint32_t> prim_indices;
+        read_index_data(primitive.indices, prim_indices);
+        index_count = static_cast<uint32_t>(prim_indices.size());
+        all_indices.insert(all_indices.end(), prim_indices.begin(), prim_indices.end());
+      }
+      else
+      {
+        index_count = static_cast<uint32_t>(num_verts);
+        for (size_t i = 0; i < num_verts; ++i)
+        {
+          all_indices.push_back(static_cast<uint32_t>(i));
+        }
+      }
+
+      // Compute centroid (average of all vertex positions in object space)
+      glm::vec3 centroid(0.0f);
+      for (size_t i = 0; i < num_verts; ++i)
+      {
+        centroid += glm::vec3(positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]);
+      }
+      if (num_verts > 0)
+      {
+        centroid /= static_cast<float>(num_verts);
+      }
+
+      ScenePrimitive scene_prim;
+      scene_prim.firstIndex = first_index;
+      scene_prim.indexCount = index_count;
+      scene_prim.vertexOffset = vertex_offset;
+      scene_prim.materialIndex = mat_index;
+      scene_prim.modelMatrix = model_matrix;
+      scene_prim.centroid = centroid;
+      primitives.push_back(scene_prim);
+    }
+  }
+
+  // Recurse into children
+  for (size_t i = 0; i < node->children_count; ++i)
+  {
+    traverse_nodes(node->children[i], data, device, base_path,
+      all_vertices, all_indices, primitives, materials, material_map);
+  }
+}
+
+} // anonymous namespace
+
+GltfScene load_gltf_scene(const Device& device, const std::string& filepath)
+{
+  GltfScene scene;
+
+  if (!std::filesystem::exists(filepath))
+  {
+    spdlog::error("glTF file not found: {}", filepath);
+    return scene;
+  }
+
+  std::filesystem::path file_path(filepath);
+  std::filesystem::path base_path = file_path.parent_path();
+
+  cgltf_options options = {};
+  cgltf_data* data = nullptr;
+
+  cgltf_result result = cgltf_parse_file(&options, filepath.c_str(), &data);
+  if (result != cgltf_result_success)
+  {
+    spdlog::error("Failed to parse glTF file: {} (error {})", filepath, static_cast<int>(result));
+    return scene;
+  }
+
+  result = cgltf_load_buffers(&options, data, filepath.c_str());
+  if (result != cgltf_result_success)
+  {
+    spdlog::error("Failed to load glTF buffers: {} (error {})", filepath, static_cast<int>(result));
+    cgltf_free(data);
+    return scene;
+  }
+
+  std::vector<Vertex> all_vertices;
+  std::vector<uint32_t> all_indices;
+  std::unordered_map<const cgltf_material*, uint32_t> material_map;
+
+  // Traverse all scene nodes
+  for (size_t s = 0; s < data->scenes_count; ++s)
+  {
+    const cgltf_scene& gltf_scene = data->scenes[s];
+    for (size_t n = 0; n < gltf_scene.nodes_count; ++n)
+    {
+      traverse_nodes(gltf_scene.nodes[n], data, device, base_path,
+        all_vertices, all_indices, scene.primitives, scene.materials, material_map);
+    }
+  }
+
+  cgltf_free(data);
+
+  if (all_vertices.empty())
+  {
+    spdlog::error("No vertices loaded from glTF scene: {}", filepath);
+    return scene;
+  }
+
+  std::string mesh_name = file_path.stem().string();
+
+  if (all_indices.empty())
+  {
+    scene.mesh = std::make_unique<Mesh>(device, mesh_name, all_vertices);
+  }
+  else
+  {
+    scene.mesh = std::make_unique<Mesh>(device, mesh_name, all_vertices, all_indices);
+  }
+
+  spdlog::info("Loaded glTF scene '{}': {} vertices, {} indices, {} primitives, {} materials",
+    mesh_name, all_vertices.size(), all_indices.size(),
+    scene.primitives.size(), scene.materials.size());
+
+  return scene;
 }
 
 } // namespace sps::vulkan

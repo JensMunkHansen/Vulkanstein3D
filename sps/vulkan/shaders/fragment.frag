@@ -34,6 +34,14 @@ layout(set = 0, binding = 6) uniform sampler2D brdfLUT;           // BRDF integr
 layout(set = 0, binding = 7) uniform samplerCube irradianceMap;   // Diffuse IBL
 layout(set = 0, binding = 8) uniform samplerCube prefilterMap;    // Specular IBL (mips = roughness)
 
+// Push constant for per-draw material properties
+layout(push_constant) uniform PushConstants {
+  mat4 model;            // 64 bytes (vertex stage)
+  vec4 baseColorFactor;  // 16 bytes
+  float alphaCutoff;     //  4 bytes
+  uint alphaMode;        //  4 bytes  0=OPAQUE, 1=MASK, 2=BLEND
+} pc;
+
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in vec3 fragPos;
@@ -229,13 +237,15 @@ void main()
     N = normalize(fragNormal);
   }
 
-  // Sample base color texture and convert from sRGB to linear
+  // Sample base color texture, apply material factor, convert from sRGB to linear
   vec4 texColor = texture(baseColorTexture, fragTexCoord);
-  vec3 albedo = sRGBToLinear(texColor.rgb);
+  vec4 baseColor = texColor * pc.baseColorFactor;
+  vec3 albedo = sRGBToLinear(baseColor.rgb);
 
   // Use texture color if available (non-white), otherwise use vertex color
-  if (texColor.r > 0.99 && texColor.g > 0.99 && texColor.b > 0.99) {
-    // Default white texture - use vertex color (assume already linear or accept slight error)
+  if (texColor.r > 0.99 && texColor.g > 0.99 && texColor.b > 0.99 &&
+      pc.baseColorFactor.r > 0.99 && pc.baseColorFactor.g > 0.99 && pc.baseColorFactor.b > 0.99) {
+    // Default white texture with white factor - use vertex color
     albedo = fragColor;
   }
 
@@ -386,5 +396,16 @@ void main()
   // Gamma correction (linear to sRGB)
   color = linearToSRGB(color);
 
-  outColor = vec4(color, 1.0);
+  // Alpha mode handling (late discard per Khronos reference)
+  if (pc.alphaMode == 1u) {
+    // MASK: discard fragments below cutoff
+    if (baseColor.a < pc.alphaCutoff) discard;
+    outColor = vec4(color, 1.0);
+  } else if (pc.alphaMode == 2u) {
+    // BLEND: output with alpha for blending
+    outColor = vec4(color, baseColor.a);
+  } else {
+    // OPAQUE (default)
+    outColor = vec4(color, 1.0);
+  }
 }

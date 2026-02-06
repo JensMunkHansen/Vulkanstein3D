@@ -36,14 +36,16 @@ mode = "rasterization"
 # Geometry source: "triangle" (built-in default), "ply", or "gltf"
 source = "gltf"
 
+hdr_file = "../../data/neutral.hdr"
+
 # Path to PLY file (used when source = "ply")
 ply_file = "../../data/VertexColorLowerJawScan.ply"
 
 # Path to glTF file (used when source = "gltf")
-gltf_file = "../../../data/DamagedHelmet/DamagedHelmet.gltf"
-
-# Path to HDR environment map (used for IBL lighting)
-hdr_file = "../../../data/neutral.hdr"
+gltf_file = "../../data/DamagedHelmet/DamagedHelmet.glb"
+# gltf_file = "../../data/CompareMetallic/glTF/CompareMetallic.gltf"
+#gltf_file = "../../data/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf"
+#gltf_file = "../../data/CarConcept/glTF/CarConcept.gltf"
 
 [application.lighting]
 # Light type: "directional", "point", or "area"

@@ -6,11 +6,11 @@
 
 #include <sps/tools/cla_parser.hpp>
 #include <sps/vulkan/app.h>
+#include <sps/vulkan/debug_constants.h>
+#include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/meta.hpp>
 #include <sps/vulkan/ply_loader.h>
-#include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/screenshot.h>
-#include <sps/vulkan/debug_constants.h>
 
 #include <fstream>
 #include <sps/vulkan/vertex.h>
@@ -29,9 +29,10 @@
 #include <spdlog/spdlog.h>
 #include <toml.hpp>
 
-#include <glm/gtc/type_ptr.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -291,7 +292,8 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   spdlog::trace("Title: {}", configuration_title);
 
   // Vulkan settings
-  m_preferred_gpu = toml::find_or<std::string>(renderer_configuration, "vulkan", "preferred_gpu", "");
+  m_preferred_gpu =
+    toml::find_or<std::string>(renderer_configuration, "vulkan", "preferred_gpu", "");
   if (!m_preferred_gpu.empty())
   {
     spdlog::info("Preferred GPU from config: {}", m_preferred_gpu);
@@ -343,8 +345,8 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   spdlog::trace("Window: {}, {} x {}", m_window_title, m_window_width, m_window_height);
 
   // Rendering options
-  m_backfaceCulling =
-    toml::find_or<bool>(renderer_configuration, "application", "rendering", "backface_culling", true);
+  m_backfaceCulling = toml::find_or<bool>(
+    renderer_configuration, "application", "rendering", "backface_culling", true);
   spdlog::trace("Backface culling: {}", m_backfaceCulling);
 
   // Rendering mode (raytracing or rasterization)
@@ -384,8 +386,8 @@ void Application::load_toml_configuration_file(const std::string& file_name)
       auto light = std::make_unique<DirectionalLight>();
       if (light_dir.size() >= 3)
       {
-        light->set_direction(static_cast<float>(light_dir[0]),
-          static_cast<float>(light_dir[1]), static_cast<float>(light_dir[2]));
+        light->set_direction(static_cast<float>(light_dir[0]), static_cast<float>(light_dir[1]),
+          static_cast<float>(light_dir[2]));
       }
       m_light = std::move(light);
     }
@@ -395,20 +397,21 @@ void Application::load_toml_configuration_file(const std::string& file_name)
       auto light = std::make_unique<PointLight>();
       if (light_dir.size() >= 3)
       {
-        light->set_position(static_cast<float>(light_dir[0]),
-          static_cast<float>(light_dir[1]), static_cast<float>(light_dir[2]));
+        light->set_position(static_cast<float>(light_dir[0]), static_cast<float>(light_dir[1]),
+          static_cast<float>(light_dir[2]));
       }
       m_light = std::move(light);
     }
     else
     {
       // Default to point light
-      auto light_dir = toml::find_or<std::vector<double>>(lighting, "light_direction", {0.0, 0.0, 0.0});
+      auto light_dir =
+        toml::find_or<std::vector<double>>(lighting, "light_direction", { 0.0, 0.0, 0.0 });
       auto light = std::make_unique<PointLight>();
       if (light_dir.size() >= 3)
       {
-        light->set_position(static_cast<float>(light_dir[0]),
-          static_cast<float>(light_dir[1]), static_cast<float>(light_dir[2]));
+        light->set_position(static_cast<float>(light_dir[0]), static_cast<float>(light_dir[1]),
+          static_cast<float>(light_dir[2]));
       }
       m_light = std::move(light);
     }
@@ -416,8 +419,8 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     // Set common properties
     if (light_color.size() >= 3)
     {
-      m_light->set_color(static_cast<float>(light_color[0]),
-        static_cast<float>(light_color[1]), static_cast<float>(light_color[2]));
+      m_light->set_color(static_cast<float>(light_color[0]), static_cast<float>(light_color[1]),
+        static_cast<float>(light_color[2]));
     }
     m_light->set_intensity(light_intensity);
     if (ambient_color.size() >= 3)
@@ -459,17 +462,21 @@ void Application::create_default_mesh()
   // Create default 1x1 flat normal texture (pointing up in tangent space: 0,0,1 -> RGB 128,128,255)
   // Reference: https://docs.unity3d.com/Manual/StandardShaderMaterialParameterNormalMap.html
   const uint8_t flat_normal[] = { 128, 128, 255, 255 };
-  m_defaultNormalTexture = std::make_unique<Texture>(*m_device, "default normal", flat_normal, 1, 1);
+  m_defaultNormalTexture =
+    std::make_unique<Texture>(*m_device, "default normal", flat_normal, 1, 1);
 
   // Create default 1x1 metallic/roughness texture (non-metallic, medium roughness)
   // glTF format: G=roughness, B=metallic (R and A unused, set to white for visibility)
   // Default: roughness=0.5 (128), metallic=0 (0)
-  const uint8_t default_mr[] = { 255, 128, 0, 255 };  // R=unused, G=roughness(0.5), B=metallic(0), A=unused
-  m_defaultMetallicRoughness = std::make_unique<Texture>(*m_device, "default metallic/roughness", default_mr, 1, 1);
+  const uint8_t default_mr[] = { 255, 128, 0,
+    255 }; // R=unused, G=roughness(0.5), B=metallic(0), A=unused
+  m_defaultMetallicRoughness =
+    std::make_unique<Texture>(*m_device, "default metallic/roughness", default_mr, 1, 1);
 
   // Create default 1x1 emissive texture (black = no emission)
   const uint8_t default_emissive[] = { 0, 0, 0, 255 };
-  m_defaultEmissive = std::make_unique<Texture>(*m_device, "default emissive", default_emissive, 1, 1);
+  m_defaultEmissive =
+    std::make_unique<Texture>(*m_device, "default emissive", default_emissive, 1, 1);
 
   // Create default 1x1 AO texture (white = no occlusion)
   // glTF stores AO in R channel, but we sample all channels for simplicity
@@ -491,46 +498,20 @@ void Application::create_default_mesh()
   // Check geometry source from config
   if (m_geometry_source == "gltf" && !m_gltf_file.empty())
   {
-    // Try to load glTF file with textures
-    GltfModel model = load_gltf_model(*m_device, m_gltf_file);
+    // Load glTF scene with per-primitive materials and transforms
+    GltfScene scene = load_gltf_scene(*m_device, m_gltf_file);
 
-    if (model.mesh)
+    if (scene.mesh)
     {
-      m_mesh = std::move(model.mesh);
-      m_baseColorTexture = std::move(model.baseColorTexture);
-      m_normalTexture = std::move(model.normalTexture);
-      m_metallicRoughnessTexture = std::move(model.metallicRoughnessTexture);
-      m_emissiveTexture = std::move(model.emissiveTexture);
-      m_aoTexture = std::move(model.aoTexture);
+      m_mesh = std::move(scene.mesh);
 
-      spdlog::info("Loaded glTF mesh from {}: {} vertices, {} indices",
-        m_gltf_file, m_mesh->vertex_count(), m_mesh->index_count());
+      // Store scene for multi-material rendering (textures stay in scene.materials)
+      m_scene = std::move(scene);
 
-      if (m_baseColorTexture)
-      {
-        spdlog::info("  with base color texture: {}x{}",
-          m_baseColorTexture->width(), m_baseColorTexture->height());
-      }
-      if (m_normalTexture)
-      {
-        spdlog::info("  with normal texture: {}x{}",
-          m_normalTexture->width(), m_normalTexture->height());
-      }
-      if (m_metallicRoughnessTexture)
-      {
-        spdlog::info("  with metallic/roughness texture: {}x{}",
-          m_metallicRoughnessTexture->width(), m_metallicRoughnessTexture->height());
-      }
-      if (m_emissiveTexture)
-      {
-        spdlog::info("  with emissive texture: {}x{}",
-          m_emissiveTexture->width(), m_emissiveTexture->height());
-      }
-      if (m_aoTexture)
-      {
-        spdlog::info("  with AO texture: {}x{}",
-          m_aoTexture->width(), m_aoTexture->height());
-      }
+      spdlog::info(
+        "Loaded glTF scene from {}: {} vertices, {} indices, {} primitives, {} materials",
+        m_gltf_file, m_mesh->vertex_count(), m_mesh->index_count(), m_scene->primitives.size(),
+        m_scene->materials.size());
 
       // Adjust camera for the mesh
       m_camera.set_position(0.0f, 0.0f, 5.0f);
@@ -548,8 +529,8 @@ void Application::create_default_mesh()
 
     if (m_mesh)
     {
-      spdlog::info("Loaded PLY mesh from {}: {} vertices, {} indices",
-        m_ply_file, m_mesh->vertex_count(), m_mesh->index_count());
+      spdlog::info("Loaded PLY mesh from {}: {} vertices, {} indices", m_ply_file,
+        m_mesh->vertex_count(), m_mesh->index_count());
 
       // Adjust camera for the mesh (it may be larger than our triangle)
       m_camera.set_position(0.0f, 0.0f, 100.0f);
@@ -594,12 +575,13 @@ void Application::create_depth_resources()
   m_depthImage = m_device->device().createImage(imageInfo);
 
   // Allocate memory
-  vk::MemoryRequirements memRequirements = m_device->device().getImageMemoryRequirements(m_depthImage);
+  vk::MemoryRequirements memRequirements =
+    m_device->device().getImageMemoryRequirements(m_depthImage);
 
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex =
-    m_device->find_memory_type(memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+    memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
   m_depthImageMemory = m_device->device().allocateMemory(allocInfo);
   m_device->device().bindImageMemory(m_depthImage, m_depthImageMemory, 0);
@@ -632,37 +614,88 @@ void Application::create_descriptor()
   // Choose textures: use loaded if available, otherwise defaults
   Texture* colorTex = m_baseColorTexture ? m_baseColorTexture.get() : m_defaultTexture.get();
   Texture* normalTex = m_normalTexture ? m_normalTexture.get() : m_defaultNormalTexture.get();
-  Texture* mrTex = m_metallicRoughnessTexture ? m_metallicRoughnessTexture.get() : m_defaultMetallicRoughness.get();
+  Texture* mrTex = m_metallicRoughnessTexture ? m_metallicRoughnessTexture.get()
+                                              : m_defaultMetallicRoughness.get();
   Texture* emissiveTex = m_emissiveTexture ? m_emissiveTexture.get() : m_defaultEmissive.get();
   Texture* aoTex = m_aoTexture ? m_aoTexture.get() : m_defaultAO.get();
 
   DescriptorBuilder builder(*m_device);
   builder.add_uniform_buffer<UniformBufferObject>(m_uniform_buffer->buffer(), 0,
     vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(colorTex->image_view(), colorTex->sampler(), 1,
-    vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(normalTex->image_view(), normalTex->sampler(), 2,
-    vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(mrTex->image_view(), mrTex->sampler(), 3,
-    vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(emissiveTex->image_view(), emissiveTex->sampler(), 4,
-    vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(aoTex->image_view(), aoTex->sampler(), 5,
-    vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(
+    colorTex->image_view(), colorTex->sampler(), 1, vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(
+    normalTex->image_view(), normalTex->sampler(), 2, vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(
+    mrTex->image_view(), mrTex->sampler(), 3, vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(
+    emissiveTex->image_view(), emissiveTex->sampler(), 4, vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(
+    aoTex->image_view(), aoTex->sampler(), 5, vk::ShaderStageFlagBits::eFragment);
 
   // IBL textures (bindings 6, 7, 8)
   if (m_ibl)
   {
-    builder.add_combined_image_sampler(m_ibl->brdf_lut_view(), m_ibl->brdf_lut_sampler(), 6,
-      vk::ShaderStageFlagBits::eFragment);
-    builder.add_combined_image_sampler(m_ibl->irradiance_view(), m_ibl->irradiance_sampler(), 7,
-      vk::ShaderStageFlagBits::eFragment);
+    builder.add_combined_image_sampler(
+      m_ibl->brdf_lut_view(), m_ibl->brdf_lut_sampler(), 6, vk::ShaderStageFlagBits::eFragment);
+    builder.add_combined_image_sampler(
+      m_ibl->irradiance_view(), m_ibl->irradiance_sampler(), 7, vk::ShaderStageFlagBits::eFragment);
     builder.add_combined_image_sampler(m_ibl->prefiltered_view(), m_ibl->prefiltered_sampler(), 8,
       vk::ShaderStageFlagBits::eFragment);
   }
 
   m_descriptor = std::make_unique<ResourceDescriptor>(builder.build("camera descriptor"));
   spdlog::trace("Created descriptor with PBR texture bindings + IBL");
+
+  // Create per-material descriptors for scene graph rendering
+  if (m_scene && !m_scene->materials.empty())
+  {
+    m_material_descriptors.clear();
+
+    for (size_t i = 0; i < m_scene->materials.size(); ++i)
+    {
+      const auto& mat = m_scene->materials[i];
+
+      Texture* matColor =
+        mat.baseColorTexture ? mat.baseColorTexture.get() : m_defaultTexture.get();
+      Texture* matNormal =
+        mat.normalTexture ? mat.normalTexture.get() : m_defaultNormalTexture.get();
+      Texture* matMR = mat.metallicRoughnessTexture ? mat.metallicRoughnessTexture.get()
+                                                    : m_defaultMetallicRoughness.get();
+      Texture* matEmissive =
+        mat.emissiveTexture ? mat.emissiveTexture.get() : m_defaultEmissive.get();
+      Texture* matAO = mat.aoTexture ? mat.aoTexture.get() : m_defaultAO.get();
+
+      DescriptorBuilder mat_builder(*m_device);
+      mat_builder.add_uniform_buffer<UniformBufferObject>(m_uniform_buffer->buffer(), 0,
+        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
+      mat_builder.add_combined_image_sampler(
+        matColor->image_view(), matColor->sampler(), 1, vk::ShaderStageFlagBits::eFragment);
+      mat_builder.add_combined_image_sampler(
+        matNormal->image_view(), matNormal->sampler(), 2, vk::ShaderStageFlagBits::eFragment);
+      mat_builder.add_combined_image_sampler(
+        matMR->image_view(), matMR->sampler(), 3, vk::ShaderStageFlagBits::eFragment);
+      mat_builder.add_combined_image_sampler(
+        matEmissive->image_view(), matEmissive->sampler(), 4, vk::ShaderStageFlagBits::eFragment);
+      mat_builder.add_combined_image_sampler(
+        matAO->image_view(), matAO->sampler(), 5, vk::ShaderStageFlagBits::eFragment);
+
+      if (m_ibl)
+      {
+        mat_builder.add_combined_image_sampler(
+          m_ibl->brdf_lut_view(), m_ibl->brdf_lut_sampler(), 6, vk::ShaderStageFlagBits::eFragment);
+        mat_builder.add_combined_image_sampler(m_ibl->irradiance_view(),
+          m_ibl->irradiance_sampler(), 7, vk::ShaderStageFlagBits::eFragment);
+        mat_builder.add_combined_image_sampler(m_ibl->prefiltered_view(),
+          m_ibl->prefiltered_sampler(), 8, vk::ShaderStageFlagBits::eFragment);
+      }
+
+      m_material_descriptors.push_back(
+        std::make_unique<ResourceDescriptor>(mat_builder.build("material_" + std::to_string(i))));
+    }
+
+    spdlog::info("Created {} per-material descriptors", m_material_descriptors.size());
+  }
 }
 
 void Application::create_rt_storage_image()
@@ -690,8 +723,8 @@ void Application::create_rt_storage_image()
 
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
-    memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+  allocInfo.memoryTypeIndex =
+    m_device->find_memory_type(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
   m_rt_image_memory = dev.allocateMemory(allocInfo);
   dev.bindImageMemory(m_rt_image, m_rt_image_memory, 0);
@@ -718,10 +751,9 @@ void Application::create_rt_descriptor()
 
   // Create descriptor pool
   std::vector<vk::DescriptorPoolSize> poolSizes = {
-    { vk::DescriptorType::eAccelerationStructureKHR, 1 },
-    { vk::DescriptorType::eStorageImage, 1 },
+    { vk::DescriptorType::eAccelerationStructureKHR, 1 }, { vk::DescriptorType::eStorageImage, 1 },
     { vk::DescriptorType::eUniformBuffer, 1 },
-    { vk::DescriptorType::eStorageBuffer, 2 }  // vertex + index buffers
+    { vk::DescriptorType::eStorageBuffer, 2 } // vertex + index buffers
   };
 
   vk::DescriptorPoolCreateInfo poolInfo{};
@@ -732,8 +764,7 @@ void Application::create_rt_descriptor()
   m_rt_descriptor_pool = dev.createDescriptorPool(poolInfo);
 
   // Create descriptor set layout
-  std::vector<vk::DescriptorSetLayoutBinding> bindings = {
-    // Binding 0: TLAS
+  std::vector<vk::DescriptorSetLayoutBinding> bindings = { // Binding 0: TLAS
     { 0, vk::DescriptorType::eAccelerationStructureKHR, 1,
       vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR },
     // Binding 1: Storage image
@@ -912,13 +943,11 @@ void Application::update_uniform_buffer()
     ubo.viewPos = glm::vec4(m_debug_2d_pan.x, m_debug_2d_pan.y, m_debug_2d_zoom, 0.0f);
 
     // material.z = textureIndex (0=baseColor, 1=normal, 2=metalRough, 3=emissive, 4=ao)
-    ubo.material = glm::vec4(m_shininess, m_specularStrength,
-      static_cast<float>(m_debug_texture_index), m_aoStrength);
+    ubo.material = glm::vec4(
+      m_shininess, m_specularStrength, static_cast<float>(m_debug_texture_index), m_aoStrength);
 
     // flags.x = channelMode (0=RGB, 1=R, 2=G, 3=B, 4=A)
-    ubo.flags = glm::vec4(
-      static_cast<float>(m_debug_channel_mode),
-      0.0f, 0.0f, 0.0f);
+    ubo.flags = glm::vec4(static_cast<float>(m_debug_channel_mode), 0.0f, 0.0f, 0.0f);
   }
   else
   {
@@ -927,18 +956,12 @@ void Application::update_uniform_buffer()
     ubo.material = glm::vec4(m_shininess, m_specularStrength, m_metallicAmbient, m_aoStrength);
 
     // Rendering flags: x=useNormalMap, y=useEmissive, z=useAO, w=exposure
-    ubo.flags = glm::vec4(
-      m_use_normal_mapping ? 1.0f : 0.0f,
-      m_use_emissive ? 1.0f : 0.0f,
-      m_use_ao ? 1.0f : 0.0f,
-      m_exposure);
+    ubo.flags = glm::vec4(m_use_normal_mapping ? 1.0f : 0.0f, m_use_emissive ? 1.0f : 0.0f,
+      m_use_ao ? 1.0f : 0.0f, m_exposure);
 
     // IBL parameters: x=useIBL, y=intensity, z=tonemapMode, w=reserved
-    ubo.ibl_params = glm::vec4(
-      m_use_ibl ? 1.0f : 0.0f,
-      m_ibl ? m_ibl->intensity() : 1.0f,
-      static_cast<float>(m_tonemap_mode),
-      0.0f);
+    ubo.ibl_params = glm::vec4(m_use_ibl ? 1.0f : 0.0f, m_ibl ? m_ibl->intensity() : 1.0f,
+      static_cast<float>(m_tonemap_mode), 0.0f);
   }
 
   m_uniform_buffer->update(ubo);
@@ -1048,8 +1071,8 @@ void Application::mouse_callback(GLFWwindow* window, double xpos, double ypos)
   if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS)
   {
     const float panSensitivity = 0.005f;
-    app->m_camera.pan(static_cast<float>(-xoffset) * panSensitivity,
-      static_cast<float>(yoffset) * panSensitivity);
+    app->m_camera.pan(
+      static_cast<float>(-xoffset) * panSensitivity, static_cast<float>(yoffset) * panSensitivity);
   }
 }
 
@@ -1128,15 +1151,13 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     barrier.srcAccessMask = {};
     barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
 
-    commandBuffer.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eRayTracingShaderKHR,
-      {}, {}, {}, barrier);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+      vk::PipelineStageFlagBits::eRayTracingShaderKHR, {}, {}, {}, barrier);
 
     // Bind RT pipeline and descriptor set
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, m_rt_pipeline->pipeline());
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eRayTracingKHR,
-      m_rt_pipeline->layout(), 0, m_rt_descriptor_set, {});
+    commandBuffer.bindDescriptorSets(
+      vk::PipelineBindPoint::eRayTracingKHR, m_rt_pipeline->layout(), 0, m_rt_descriptor_set, {});
 
     // Trace rays
     m_rt_pipeline->trace_rays(commandBuffer, extent.width, extent.height);
@@ -1147,10 +1168,8 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
     barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
 
-    commandBuffer.pipelineBarrier(
-      vk::PipelineStageFlagBits::eRayTracingShaderKHR,
-      vk::PipelineStageFlagBits::eTransfer,
-      {}, {}, {}, barrier);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eRayTracingShaderKHR,
+      vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, barrier);
 
     // Transition swapchain image to transfer dst
     vk::ImageMemoryBarrier swapBarrier{};
@@ -1167,28 +1186,25 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     swapBarrier.srcAccessMask = {};
     swapBarrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
 
-    commandBuffer.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eTransfer,
-      {}, {}, {}, swapBarrier);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+      vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, swapBarrier);
 
     // Blit RT image to swapchain image
     vk::ImageBlit blitRegion{};
     blitRegion.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
     blitRegion.srcSubresource.layerCount = 1;
     blitRegion.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-    blitRegion.srcOffsets[1] = vk::Offset3D{ static_cast<int32_t>(extent.width),
-      static_cast<int32_t>(extent.height), 1 };
+    blitRegion.srcOffsets[1] =
+      vk::Offset3D{ static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1 };
     blitRegion.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
     blitRegion.dstSubresource.layerCount = 1;
     blitRegion.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-    blitRegion.dstOffsets[1] = vk::Offset3D{ static_cast<int32_t>(extent.width),
-      static_cast<int32_t>(extent.height), 1 };
+    blitRegion.dstOffsets[1] =
+      vk::Offset3D{ static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1 };
 
-    commandBuffer.blitImage(
-      m_rt_image, vk::ImageLayout::eTransferSrcOptimal,
-      m_swapchain->images()[imageIndex], vk::ImageLayout::eTransferDstOptimal,
-      blitRegion, vk::Filter::eNearest);
+    commandBuffer.blitImage(m_rt_image, vk::ImageLayout::eTransferSrcOptimal,
+      m_swapchain->images()[imageIndex], vk::ImageLayout::eTransferDstOptimal, blitRegion,
+      vk::Filter::eNearest);
 
     // Transition swapchain image to present
     swapBarrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
@@ -1196,10 +1212,8 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     swapBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
     swapBarrier.dstAccessMask = {};
 
-    commandBuffer.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTransfer,
-      vk::PipelineStageFlagBits::eBottomOfPipe,
-      {}, {}, {}, swapBarrier);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+      vk::PipelineStageFlagBits::eBottomOfPipe, {}, {}, {}, swapBarrier);
   }
   else
   {
@@ -1239,28 +1253,110 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     {
       // 2D mode: fullscreen quad to display texture
       commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipeline);
-      commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipelineLayout, 0,
-        m_descriptor->descriptor_set(), {});
+      commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipelineLayout,
+        0, m_descriptor->descriptor_set(), {});
 
       // Draw fullscreen triangle (3 vertices, no vertex buffer)
       commandBuffer.draw(3, 1, 0, 0);
     }
     else
     {
-      // 3D mode: render mesh
-      commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-      commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
-        m_descriptor->descriptor_set(), {});
+      // Push constant struct matching shader layout (88 bytes)
+      struct PushConstants
+      {
+        glm::mat4 model;
+        glm::vec4 baseColorFactor;
+        float alphaCutoff;
+        uint32_t alphaMode;
+      } pc{};
 
-      // Bind and draw mesh
       if (m_mesh)
       {
         m_mesh->bind(commandBuffer);
-        m_mesh->draw(commandBuffer);
-      }
 
-      // TODO: Light indicator needs push constants for per-draw model matrix
-      // Updating UBO mid-frame doesn't work - GPU sees final state for all draws
+        if (m_scene && !m_scene->primitives.empty() && !m_material_descriptors.empty())
+        {
+          // Pass 1: Opaque pipeline — draw OPAQUE + MASK primitives
+          commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+
+          // Collect blend primitives for pass 2
+          std::vector<const ScenePrimitive*> blend_prims;
+
+          for (const auto& prim : m_scene->primitives)
+          {
+            const auto& mat = m_scene->materials[prim.materialIndex];
+
+            if (mat.alphaMode == AlphaMode::Blend)
+            {
+              blend_prims.push_back(&prim);
+              continue;
+            }
+
+            pc.model = prim.modelMatrix;
+            pc.baseColorFactor = mat.baseColorFactor;
+            pc.alphaCutoff = mat.alphaCutoff;
+            pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
+
+            commandBuffer.pushConstants(m_pipelineLayout,
+              vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+              static_cast<uint32_t>(sizeof(pc)), &pc);
+            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
+              m_material_descriptors[prim.materialIndex]->descriptor_set(), {});
+            commandBuffer.drawIndexed(prim.indexCount, 1, prim.firstIndex, prim.vertexOffset, 0);
+          }
+
+          // Pass 2: Blend pipeline — draw BLEND primitives sorted back-to-front
+          if (!blend_prims.empty())
+          {
+            // Sort by view-space depth (back-to-front = ascending Z in view space)
+            glm::mat4 viewMatrix = m_camera.view_matrix();
+            std::sort(blend_prims.begin(), blend_prims.end(),
+              [&viewMatrix](const ScenePrimitive* a, const ScenePrimitive* b)
+              {
+                glm::vec4 aView = viewMatrix * a->modelMatrix * glm::vec4(a->centroid, 1.0f);
+                glm::vec4 bView = viewMatrix * b->modelMatrix * glm::vec4(b->centroid, 1.0f);
+                return aView.z < bView.z; // more negative Z = farther = draw first
+              });
+
+            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_blend_pipeline);
+
+            for (const auto* prim : blend_prims)
+            {
+              const auto& mat = m_scene->materials[prim->materialIndex];
+
+              pc.model = prim->modelMatrix;
+              pc.baseColorFactor = mat.baseColorFactor;
+              pc.alphaCutoff = mat.alphaCutoff;
+              pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
+
+              commandBuffer.pushConstants(m_pipelineLayout,
+                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+                static_cast<uint32_t>(sizeof(pc)), &pc);
+              commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout,
+                0, m_material_descriptors[prim->materialIndex]->descriptor_set(), {});
+              commandBuffer.drawIndexed(
+                prim->indexCount, 1, prim->firstIndex, prim->vertexOffset, 0);
+            }
+          }
+        }
+        else
+        {
+          // Legacy single-draw path: opaque defaults
+          commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+
+          pc.model = glm::mat4(1.0f);
+          pc.baseColorFactor = glm::vec4(1.0f);
+          pc.alphaCutoff = 0.5f;
+          pc.alphaMode = 0; // OPAQUE
+
+          commandBuffer.pushConstants(m_pipelineLayout,
+            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
+            static_cast<uint32_t>(sizeof(pc)), &pc);
+          commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
+            m_descriptor->descriptor_set(), {});
+          m_mesh->draw(commandBuffer);
+        }
+      }
     }
 
     // Call UI render callback (for ImGui etc.)
@@ -1470,7 +1566,8 @@ void Application::make_pipeline()
   make_pipeline(SHADER_DIR "vertex.spv", SHADER_DIR "fragment.spv");
 }
 
-void Application::make_pipeline(const std::string& vertex_shader, const std::string& fragment_shader)
+void Application::make_pipeline(
+  const std::string& vertex_shader, const std::string& fragment_shader)
 {
   m_vertex_shader_path = vertex_shader;
   m_fragment_shader_path = fragment_shader;
@@ -1496,12 +1593,33 @@ void Application::make_pipeline(const std::string& vertex_shader, const std::str
   specification.depthTestEnabled = m_depthTestEnabled;
   specification.depthFormat = m_depthFormat;
 
+  // Push constant: model(64) + baseColorFactor(16) + alphaCutoff(4) + alphaMode(4) = 88 bytes
+  vk::PushConstantRange pcRange{
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 88
+  };
+  specification.pushConstantRanges = { pcRange };
+
+  // Pipeline 1: opaque (no blend, depth write on)
+  specification.blendEnabled = false;
+  specification.depthWriteEnabled = true;
+
   sps::vulkan::GraphicsPipelineOutBundle output =
     sps::vulkan::create_graphics_pipeline(specification, true);
 
   m_pipelineLayout = output.layout;
   m_renderpass = output.renderpass;
   m_pipeline = output.pipeline;
+
+  // Pipeline 2: blend (alpha blend on, depth write off, reuse layout + renderpass)
+  specification.blendEnabled = true;
+  specification.depthWriteEnabled = false;
+  specification.existingPipelineLayout = m_pipelineLayout;
+  specification.existingRenderPass = m_renderpass;
+
+  sps::vulkan::GraphicsPipelineOutBundle blendOutput =
+    sps::vulkan::create_graphics_pipeline(specification, true);
+
+  m_blend_pipeline = blendOutput.pipeline;
 }
 
 void Application::create_debug_2d_pipeline()
@@ -1523,7 +1641,7 @@ void Application::create_debug_2d_pipeline()
   // Use existing render pass (must match main pipeline's render pass for compatibility)
   // Even though we don't use depth, we need a compatible render pass
   specification.existingRenderPass = m_renderpass;
-  specification.depthTestEnabled = false;  // We won't write depth, but pass is compatible
+  specification.depthTestEnabled = false; // We won't write depth, but pass is compatible
   specification.depthFormat = m_depthFormat;
 
   sps::vulkan::GraphicsPipelineOutBundle output =
@@ -1541,7 +1659,7 @@ void Application::create_light_indicator()
   // Model matrix will position it at the light location
   const int stacks = 8;
   const int slices = 16;
-  const float radius = 1.0f;  // Unit sphere, scaled by model matrix
+  const float radius = 1.0f; // Unit sphere, scaled by model matrix
 
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
@@ -1565,7 +1683,7 @@ void Application::create_light_indicator()
       Vertex v;
       v.position = glm::vec3(x, y, z);
       v.normal = glm::normalize(v.position);
-      v.color = lightColor;  // Use light color
+      v.color = lightColor; // Use light color
       v.texCoord = glm::vec2(static_cast<float>(j) / slices, static_cast<float>(i) / stacks);
       vertices.push_back(v);
     }
@@ -1595,12 +1713,14 @@ void Application::create_light_indicator()
   spdlog::info("Created light indicator sphere ({} vertices)", vertices.size());
 }
 
-void Application::reload_shaders(const std::string& vertex_shader, const std::string& fragment_shader)
+void Application::reload_shaders(
+  const std::string& vertex_shader, const std::string& fragment_shader)
 {
   m_device->wait_idle();
 
-  // Destroy old pipeline (keep renderpass and layout for now - they're compatible)
+  // Destroy old pipelines
   m_device->device().destroyPipeline(m_pipeline);
+  m_device->device().destroyPipeline(m_blend_pipeline);
   m_device->device().destroyPipelineLayout(m_pipelineLayout);
   m_device->device().destroyRenderPass(m_renderpass);
 
@@ -1626,7 +1746,8 @@ bool Application::save_screenshot(const std::string& filepath)
   vk::Format format = m_swapchain->image_format();
   vk::Extent2D extent = m_swapchain->extent();
 
-  return sps::vulkan::save_screenshot(*m_device, m_commandPool, source_image, format, extent, filepath);
+  return sps::vulkan::save_screenshot(
+    *m_device, m_commandPool, source_image, format, extent, filepath);
 }
 
 bool Application::save_screenshot()
@@ -1644,49 +1765,72 @@ void Application::poll_commands()
 
     // Register "set" command for variables
     m_command_registry->add("set", "Set a variable", "<name> <value>",
-      [this](const std::vector<std::string>& args) {
-        if (args.size() < 2) return;
+      [this](const std::vector<std::string>& args)
+      {
+        if (args.size() < 2)
+          return;
         const std::string& name = args[0];
         float value = std::stof(args[1]);
 
-        if (name == "metallic_ambient") m_metallicAmbient = value;
-        else if (name == "ao_strength") m_aoStrength = value;
-        else if (name == "shininess") m_shininess = value;
-        else if (name == "specular") m_specularStrength = value;
-        else if (name == "normal_mapping") m_use_normal_mapping = value > 0.5f;
-        else if (name == "emissive") m_use_emissive = value > 0.5f;
-        else if (name == "ao") m_use_ao = value > 0.5f;
-        else if (name == "texture") m_debug_texture_index = static_cast<int>(value);
-        else if (name == "channel") m_debug_channel_mode = static_cast<int>(value);
-        else if (name == "2d") m_debug_2d_mode = value > 0.5f;
-        else spdlog::warn("Unknown variable: {}", name);
+        if (name == "metallic_ambient")
+          m_metallicAmbient = value;
+        else if (name == "ao_strength")
+          m_aoStrength = value;
+        else if (name == "shininess")
+          m_shininess = value;
+        else if (name == "specular")
+          m_specularStrength = value;
+        else if (name == "normal_mapping")
+          m_use_normal_mapping = value > 0.5f;
+        else if (name == "emissive")
+          m_use_emissive = value > 0.5f;
+        else if (name == "ao")
+          m_use_ao = value > 0.5f;
+        else if (name == "texture")
+          m_debug_texture_index = static_cast<int>(value);
+        else if (name == "channel")
+          m_debug_channel_mode = static_cast<int>(value);
+        else if (name == "2d")
+          m_debug_2d_mode = value > 0.5f;
+        else
+          spdlog::warn("Unknown variable: {}", name);
       });
 
     // Register "shader" command
     m_command_registry->add("shader", "Switch shader mode", "<index|name>",
-      [this](const std::vector<std::string>& args) {
-        if (args.empty()) return;
+      [this](const std::vector<std::string>& args)
+      {
+        if (args.empty())
+          return;
         int mode = std::stoi(args[0]);
-        if (mode >= 0 && mode < sps::vulkan::debug::SHADER_COUNT) {
-          reload_shaders(sps::vulkan::debug::vertex_shaders[mode], sps::vulkan::debug::fragment_shaders[mode]);
+        if (mode >= 0 && mode < sps::vulkan::debug::SHADER_COUNT)
+        {
+          reload_shaders(
+            sps::vulkan::debug::vertex_shaders[mode], sps::vulkan::debug::fragment_shaders[mode]);
           m_current_shader_mode = mode;
         }
       });
 
     // Register "screenshot" command
     m_command_registry->add("screenshot", "Save screenshot", "[filename]",
-      [this](const std::vector<std::string>& args) {
-        if (args.empty()) {
+      [this](const std::vector<std::string>& args)
+      {
+        if (args.empty())
+        {
           save_screenshot();
-        } else {
+        }
+        else
+        {
           save_screenshot(args[0]);
         }
       });
 
     // Register "mode" command for 2D/3D toggle
     m_command_registry->add("mode", "Switch 2D/3D mode", "<2d|3d>",
-      [this](const std::vector<std::string>& args) {
-        if (args.empty()) return;
+      [this](const std::vector<std::string>& args)
+      {
+        if (args.empty())
+          return;
         m_debug_2d_mode = (args[0] == "2d");
       });
 
@@ -1705,7 +1849,8 @@ void Application::poll_commands()
 
   auto file_time = std::filesystem::last_write_time(m_command_file_path);
   auto file_mtime = file_time.time_since_epoch().count();
-  if (file_mtime <= static_cast<decltype(file_mtime)>(m_command_file_mtime)) return;
+  if (file_mtime <= static_cast<decltype(file_mtime)>(m_command_file_mtime))
+    return;
   m_command_file_mtime = static_cast<time_t>(file_mtime);
 
   // Read and execute commands
@@ -1714,7 +1859,8 @@ void Application::poll_commands()
   std::vector<std::string> commands;
   while (std::getline(file, line))
   {
-    if (line.empty() || line[0] == '#') continue;
+    if (line.empty() || line[0] == '#')
+      continue;
     commands.push_back(line);
   }
   file.close();
@@ -1781,6 +1927,8 @@ Application::~Application()
   m_renderFinished.clear();
 
   // Destroy resources before device
+  m_material_descriptors.clear();
+  m_scene.reset();
   m_descriptor.reset();
   m_uniform_buffer.reset();
   m_baseColorTexture.reset();
@@ -1798,6 +1946,7 @@ Application::~Application()
   m_device->device().destroyCommandPool(m_commandPool);
 
   m_device->device().destroyPipeline(m_pipeline);
+  m_device->device().destroyPipeline(m_blend_pipeline);
   m_device->device().destroyPipelineLayout(m_pipelineLayout);
   m_device->device().destroyRenderPass(m_renderpass);
 
