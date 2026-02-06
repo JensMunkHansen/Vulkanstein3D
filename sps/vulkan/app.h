@@ -186,7 +186,7 @@ private:
   std::vector<vk::CommandBuffer> m_commandBuffers{};
 
   std::unique_ptr<Semaphore> m_imageAvailable;
-  std::unique_ptr<Semaphore> m_renderFinished;
+  std::vector<std::unique_ptr<Semaphore>> m_renderFinished;
   std::unique_ptr<Fence> m_inFlight;
 
   // Camera

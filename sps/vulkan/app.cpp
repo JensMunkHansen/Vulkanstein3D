@@ -1330,13 +1330,23 @@ void Application::recreate_swapchain()
   m_device->device().destroyImage(m_depthImage);
   m_device->device().freeMemory(m_depthImageMemory);
 
-  // 5. Recreate swapchain (handles its own image views internally)
+  // 5. Recreate semaphores (old ones may still be referenced by old swapchain presentation)
+  m_renderFinished.clear();
+
+  // 6. Recreate swapchain (handles its own image views internally)
   m_swapchain->recreate(width, height);
 
-  // 6. Recreate depth resources for new size
+  // 7. Recreate per-swapchain-image semaphores
+  m_renderFinished.resize(m_swapchain->image_count());
+  for (std::uint32_t i = 0; i < m_swapchain->image_count(); i++)
+  {
+    m_renderFinished[i] = std::make_unique<Semaphore>(*m_device, "render-finished-" + std::to_string(i));
+  }
+
+  // 8. Recreate depth resources for new size
   create_depth_resources();
 
-  // 6b. Recreate RT storage image if RT is enabled
+  // 8b. Recreate RT storage image if RT is enabled
   if (m_rt_image)
   {
     m_device->device().destroyImageView(m_rt_image_view);
@@ -1362,7 +1372,7 @@ void Application::recreate_swapchain()
     m_device->device().updateDescriptorSets(write, {});
   }
 
-  // 7. Create new framebuffers
+  // 9. Create new framebuffers
   sps::vulkan::framebufferInput frameBufferInput;
   frameBufferInput.device = m_device->device();
   frameBufferInput.renderpass = m_renderpass;
@@ -1422,7 +1432,7 @@ void Application::render()
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &commandBuffer;
 
-  vk::Semaphore signalSemaphores[] = { *m_renderFinished->semaphore() };
+  vk::Semaphore signalSemaphores[] = { *m_renderFinished[imageIndex]->semaphore() };
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
 
@@ -1768,7 +1778,7 @@ Application::~Application()
 
   m_inFlight.reset(nullptr);
   m_imageAvailable.reset(nullptr);
-  m_renderFinished.reset(nullptr);
+  m_renderFinished.clear();
 
   // Destroy resources before device
   m_descriptor.reset();
@@ -1844,7 +1854,11 @@ void Application::finalize_setup()
 
   m_inFlight = std::make_unique<Fence>(*m_device, "in-flight", true);
   m_imageAvailable = std::make_unique<Semaphore>(*m_device, "image-available");
-  m_renderFinished = std::make_unique<Semaphore>(*m_device, "render-finished");
+  m_renderFinished.resize(m_swapchain->image_count());
+  for (std::uint32_t i = 0; i < m_swapchain->image_count(); i++)
+  {
+    m_renderFinished[i] = std::make_unique<Semaphore>(*m_device, "render-finished-" + std::to_string(i));
+  }
 
   // Create 2D debug pipeline (fullscreen quad for texture viewing)
   create_debug_2d_pipeline();
