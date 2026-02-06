@@ -39,7 +39,7 @@ endif()
 
 add_custom_command(TARGET app POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml
-  ${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml)
+  $<TARGET_FILE_DIR:app>/vulk3D.toml)
 
 # ImGui-enabled version
 add_executable(app_imgui main_imgui.cpp)
@@ -61,4 +61,4 @@ endif()
 
 add_custom_command(TARGET app_imgui POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml
-  ${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml)
+  $<TARGET_FILE_DIR:app_imgui>/vulk3D.toml)

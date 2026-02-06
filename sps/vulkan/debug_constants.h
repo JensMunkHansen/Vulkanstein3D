@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sps/vulkan/config.h>
+
 // Shared constants for debug modes, textures, channels
 // Used by: C++ (app, imgui), GLSL shaders, commands
 // Keep in sync with debug_constants.glsl
@@ -73,29 +75,29 @@ inline constexpr const char* shader_names[] = {
   "2D Texture View"
 };
 
-// Shader file paths (relative to build dir)
-inline constexpr const char* vertex_shaders[] = {
-  "../sps/vulkan/shaders/vertex.spv",           // PBR
-  "../sps/vulkan/shaders/vertex.spv",           // Blinn-Phong
-  "../sps/vulkan/shaders/vertex.spv",           // Debug UV
-  "../sps/vulkan/shaders/vertex.spv",           // Debug Normals
-  "../sps/vulkan/shaders/vertex.spv",           // Debug Base Color
-  "../sps/vulkan/shaders/vertex.spv",           // Debug Metallic/Roughness
-  "../sps/vulkan/shaders/vertex.spv",           // Debug AO
-  "../sps/vulkan/shaders/vertex.spv",           // Debug Emissive
-  "../sps/vulkan/shaders/fullscreen_quad.spv"   // 2D Texture
+// Shader file paths (absolute, from config.h SHADER_DIR)
+inline const char* vertex_shaders[] = {
+  SHADER_DIR "vertex.spv",           // PBR
+  SHADER_DIR "vertex.spv",           // Blinn-Phong
+  SHADER_DIR "vertex.spv",           // Debug UV
+  SHADER_DIR "vertex.spv",           // Debug Normals
+  SHADER_DIR "vertex.spv",           // Debug Base Color
+  SHADER_DIR "vertex.spv",           // Debug Metallic/Roughness
+  SHADER_DIR "vertex.spv",           // Debug AO
+  SHADER_DIR "vertex.spv",           // Debug Emissive
+  SHADER_DIR "fullscreen_quad.spv"   // 2D Texture
 };
 
-inline constexpr const char* fragment_shaders[] = {
-  "../sps/vulkan/shaders/fragment.spv",
-  "../sps/vulkan/shaders/blinn_phong.spv",
-  "../sps/vulkan/shaders/debug_uv.spv",
-  "../sps/vulkan/shaders/debug_normals.spv",
-  "../sps/vulkan/shaders/debug_basecolor.spv",
-  "../sps/vulkan/shaders/debug_metallic_roughness.spv",
-  "../sps/vulkan/shaders/debug_ao.spv",
-  "../sps/vulkan/shaders/debug_emissive.spv",
-  "../sps/vulkan/shaders/debug_texture2d.spv"
+inline const char* fragment_shaders[] = {
+  SHADER_DIR "fragment.spv",
+  SHADER_DIR "blinn_phong.spv",
+  SHADER_DIR "debug_uv.spv",
+  SHADER_DIR "debug_normals.spv",
+  SHADER_DIR "debug_basecolor.spv",
+  SHADER_DIR "debug_metallic_roughness.spv",
+  SHADER_DIR "debug_ao.spv",
+  SHADER_DIR "debug_emissive.spv",
+  SHADER_DIR "debug_texture2d.spv"
 };
 
 } // namespace sps::vulkan::debug

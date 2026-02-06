@@ -360,6 +360,8 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     renderer_configuration, "application", "geometry", "ply_file", "");
   m_gltf_file = toml::find_or<std::string>(
     renderer_configuration, "application", "geometry", "gltf_file", "");
+  m_hdr_file = toml::find_or<std::string>(
+    renderer_configuration, "application", "geometry", "hdr_file", "");
   spdlog::trace("Geometry source: {}, PLY file: {}, glTF file: {}", m_geometry_source, m_ply_file, m_gltf_file);
 
   // Lighting options
@@ -475,12 +477,14 @@ void Application::create_default_mesh()
   m_defaultAO = std::make_unique<Texture>(*m_device, "default ao", default_ao, 1, 1);
 
   // Create IBL from HDR environment map
-  // TODO: Add HDR path to TOML config and environment selection in ImGui
-  std::string hdr_path = "../../data/neutral.hdr";  // Khronos glTF-Sample-Viewer default
   try {
-    m_ibl = std::make_unique<IBL>(*m_device, hdr_path, 128);
+    if (!m_hdr_file.empty()) {
+      m_ibl = std::make_unique<IBL>(*m_device, m_hdr_file, 128);
+    } else {
+      m_ibl = std::make_unique<IBL>(*m_device);
+    }
   } catch (const std::exception& e) {
-    spdlog::warn("Failed to load HDR '{}': {} - using neutral environment", hdr_path, e.what());
+    spdlog::warn("Failed to load HDR '{}': {} - using neutral environment", m_hdr_file, e.what());
     m_ibl = std::make_unique<IBL>(*m_device);
   }
 
@@ -829,9 +833,9 @@ void Application::create_rt_pipeline()
 {
   m_rt_pipeline = std::make_unique<RayTracingPipeline>(*m_device);
   m_rt_pipeline->create(
-    "../sps/vulkan/shaders/raygen.spv",
-    "../sps/vulkan/shaders/miss.spv",
-    "../sps/vulkan/shaders/closesthit.spv",
+    SHADER_DIR "raygen.spv",
+    SHADER_DIR "miss.spv",
+    SHADER_DIR "closesthit.spv",
     m_rt_descriptor_layout);
 }
 
@@ -1453,7 +1457,7 @@ void Application::render()
 
 void Application::make_pipeline()
 {
-  make_pipeline("../sps/vulkan/shaders/vertex.spv", "../sps/vulkan/shaders/fragment.spv");
+  make_pipeline(SHADER_DIR "vertex.spv", SHADER_DIR "fragment.spv");
 }
 
 void Application::make_pipeline(const std::string& vertex_shader, const std::string& fragment_shader)
@@ -1494,8 +1498,8 @@ void Application::create_debug_2d_pipeline()
 {
   sps::vulkan::GraphicsPipelineInBundle specification = {};
   specification.device = m_device->device();
-  specification.vertexFilepath = "../sps/vulkan/shaders/fullscreen_quad.spv";
-  specification.fragmentFilepath = "../sps/vulkan/shaders/debug_texture2d.spv";
+  specification.vertexFilepath = SHADER_DIR "fullscreen_quad.spv";
+  specification.fragmentFilepath = SHADER_DIR "debug_texture2d.spv";
   specification.swapchainExtent = m_swapchain->extent();
   specification.swapchainImageFormat = m_swapchain->image_format();
   specification.descriptorSetLayout = m_descriptor->layout();
@@ -1728,24 +1732,24 @@ void Application::apply_shader_mode(int mode)
 {
   // Must match main_imgui.cpp shader arrays
   static const char* vertex_shaders[] = {
-    "../sps/vulkan/shaders/vertex.spv",  // PBR
-    "../sps/vulkan/shaders/vertex.spv",  // Blinn-Phong
-    "../sps/vulkan/shaders/vertex.spv",  // Debug UV
-    "../sps/vulkan/shaders/vertex.spv",  // Debug Normals
-    "../sps/vulkan/shaders/vertex.spv",  // Debug Base Color
-    "../sps/vulkan/shaders/vertex.spv",  // Debug Metallic/Roughness
-    "../sps/vulkan/shaders/vertex.spv",  // Debug AO
-    "../sps/vulkan/shaders/vertex.spv"   // Debug Emissive
+    SHADER_DIR "vertex.spv",  // PBR
+    SHADER_DIR "vertex.spv",  // Blinn-Phong
+    SHADER_DIR "vertex.spv",  // Debug UV
+    SHADER_DIR "vertex.spv",  // Debug Normals
+    SHADER_DIR "vertex.spv",  // Debug Base Color
+    SHADER_DIR "vertex.spv",  // Debug Metallic/Roughness
+    SHADER_DIR "vertex.spv",  // Debug AO
+    SHADER_DIR "vertex.spv"   // Debug Emissive
   };
   static const char* fragment_shaders[] = {
-    "../sps/vulkan/shaders/fragment.spv",
-    "../sps/vulkan/shaders/blinn_phong.spv",
-    "../sps/vulkan/shaders/debug_uv.spv",
-    "../sps/vulkan/shaders/debug_normals.spv",
-    "../sps/vulkan/shaders/debug_basecolor.spv",
-    "../sps/vulkan/shaders/debug_metallic_roughness.spv",
-    "../sps/vulkan/shaders/debug_ao.spv",
-    "../sps/vulkan/shaders/debug_emissive.spv"
+    SHADER_DIR "fragment.spv",
+    SHADER_DIR "blinn_phong.spv",
+    SHADER_DIR "debug_uv.spv",
+    SHADER_DIR "debug_normals.spv",
+    SHADER_DIR "debug_basecolor.spv",
+    SHADER_DIR "debug_metallic_roughness.spv",
+    SHADER_DIR "debug_ao.spv",
+    SHADER_DIR "debug_emissive.spv"
   };
 
   constexpr int num_shaders = sizeof(fragment_shaders) / sizeof(fragment_shaders[0]);

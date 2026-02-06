@@ -40,7 +40,10 @@ source = "gltf"
 ply_file = "../../data/VertexColorLowerJawScan.ply"
 
 # Path to glTF file (used when source = "gltf")
-gltf_file = "/home/jmh/github/Rendering/filament/third_party/models/DamagedHelmet/DamagedHelmet.glb"
+gltf_file = "../../../data/DamagedHelmet/DamagedHelmet.gltf"
+
+# Path to HDR environment map (used for IBL lighting)
+hdr_file = "../../../data/neutral.hdr"
 
 [application.lighting]
 # Light type: "directional", "point", or "area"

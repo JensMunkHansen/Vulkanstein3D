@@ -52,6 +52,7 @@ private:
   std::string m_geometry_source{"triangle"};  // From TOML: application.geometry.source
   std::string m_ply_file;  // From TOML: application.geometry.ply_file
   std::string m_gltf_file;  // From TOML: application.geometry.gltf_file
+  std::string m_hdr_file;   // From TOML: application.geometry.hdr_file
 
 public:
   Application(int argc, char* argv[]);
