@@ -1,14 +1,12 @@
-data/footprint_court.hdr filter=lfs diff=lfs merge=lfs -text
-data/lightroom_14b.hdr filter=lfs diff=lfs merge=lfs -text
-data/neutral.hdr filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/LICENSE.md filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/metadata.json filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/README.body.md filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/README.md filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/screenshot filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/GLB filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/glTF filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/glTF-Binary filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/glTF-JPG filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/glTF-KTX-BasisU-Draco filter=lfs diff=lfs merge=lfs -text
-data/CarConcept/glTF-WEBP filter=lfs diff=lfs merge=lfs -text
+# Git LFS tracking for binary assets
+*.glb filter=lfs diff=lfs merge=lfs -text
+*.gltf filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.hdr filter=lfs diff=lfs merge=lfs -text
+*.ply filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.ktx2 filter=lfs diff=lfs merge=lfs -text
+*.gif filter=lfs diff=lfs merge=lfs -text
