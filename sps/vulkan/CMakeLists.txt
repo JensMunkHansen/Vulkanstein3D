@@ -3,7 +3,14 @@ set(TARGET_NAME engine)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(spdlog CONFIG)
+# Fetch spdlog
+FetchContent_MakeAvailable(spdlog)
+
+# Fetch toml11
+FetchContent_MakeAvailable(toml11)
+
+# Fetch GLFW
+FetchContent_MakeAvailable(glfw)
 
 # Fetch and build ImGui
 FetchContent_MakeAvailable(imgui)
@@ -31,8 +38,8 @@ target_include_directories(imgui_impl PUBLIC
 )
 
 target_link_libraries(imgui_impl PUBLIC
-  ${GLFW_STATIC_LIBRARIES}
-  ${Vulkan_LIBRARY}
+  glfw
+  Vulkan::Vulkan
 )
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/config.h @ONLY)
@@ -80,7 +87,8 @@ target_include_directories(${TARGET_NAME}
 
 target_link_libraries(${TARGET_NAME}
   spdlog::spdlog
-  ${GLFW_STATIC_LIBRARIES}
+  toml11::toml11
+  glfw
   ${Vulkan_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}
   ${CMAKE_DL_LIBS}

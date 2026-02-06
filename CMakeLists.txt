@@ -51,11 +51,11 @@ if (VULK3D_DISPATCH_LOADER_DYNAMIC)
   set(SPS_VULKAN_DISPATCH_LOADER_DYNAMIC 1)
 endif()
 
-add_subdirectory(debugMessenger)
+# add_subdirectory(debugMessenger)
 
 #add_subdirectory(engine)
 add_subdirectory(sps)
 
 add_subdirectory(vulk3D)
 
-add_subdirectory(helloTriangle)
+#add_subdirectory(helloTriangle)

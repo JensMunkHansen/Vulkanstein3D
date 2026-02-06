@@ -8,7 +8,7 @@ add_executable(${TARGET_NAME}
   )
 
 target_link_libraries(${TARGET_NAME}
-  ${GLFW_STATIC_LIBRARIES}
+  glfw
   ${Vulkan_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}
   ${CMAKE_DL_LIBS}

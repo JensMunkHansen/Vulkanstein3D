@@ -23,7 +23,7 @@ target_include_directories(${TARGET_NAME}
 target_link_libraries(${TARGET_NAME}
   spdlog::spdlog
   ${CMAKE_THREAD_LIBS_INIT}  
-  ${GLFW_STATIC_LIBRARIES}
+  glfw
   ${CMAKE_DL_LIBS}
 )
 
