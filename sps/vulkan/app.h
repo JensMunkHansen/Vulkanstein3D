@@ -62,6 +62,8 @@ private:
   std::string m_ply_file;  // From TOML: application.geometry.ply_file
   std::string m_gltf_file;  // From TOML: application.geometry.gltf_file
   std::string m_hdr_file;   // From TOML: application.geometry.hdr_file
+  std::vector<std::string> m_gltf_models;  // From TOML: [glTFmodels].files
+  int m_current_model_index = -1;          // Index into m_gltf_models (-1 = none)
 
 public:
   Application(int argc, char* argv[]);
@@ -117,6 +119,11 @@ public:
   Camera& camera() { return m_camera; }
   bool vsync_enabled() const { return m_vsync_enabled; }
   void set_vsync(bool enabled);
+
+  // Model switching
+  const std::vector<std::string>& gltf_models() const { return m_gltf_models; }
+  int current_model_index() const { return m_current_model_index; }
+  void load_model(int index);
 
   // Shader management
   const std::string& current_vertex_shader() const { return m_vertex_shader_path; }

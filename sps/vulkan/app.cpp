@@ -372,6 +372,23 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     renderer_configuration, "application", "geometry", "hdr_file", "");
   spdlog::trace("Geometry source: {}, PLY file: {}, glTF file: {}", m_geometry_source, m_ply_file, m_gltf_file);
 
+  // glTF model list (for runtime switching)
+  if (renderer_configuration.contains("glTFmodels"))
+  {
+    const auto& gltf_section = toml::find(renderer_configuration, "glTFmodels");
+    m_gltf_models = toml::find_or<std::vector<std::string>>(gltf_section, "files", {});
+  }
+  // Set current index if the active gltf_file is in the list
+  for (int i = 0; i < static_cast<int>(m_gltf_models.size()); ++i)
+  {
+    if (m_gltf_models[i] == m_gltf_file)
+    {
+      m_current_model_index = i;
+      break;
+    }
+  }
+  spdlog::trace("glTF model list: {} entries, current index: {}", m_gltf_models.size(), m_current_model_index);
+
   // Lighting options
   try
   {
@@ -1677,6 +1694,54 @@ void Application::poll_commands()
   clear_file << "# texture: 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao\n";
   clear_file << "# channel: 0=RGB, 1=R, 2=G, 3=B, 4=A\n";
   clear_file.close();
+}
+
+void Application::load_model(int index)
+{
+  if (index < 0 || index >= static_cast<int>(m_gltf_models.size()))
+  {
+    spdlog::warn("Invalid model index: {}", index);
+    return;
+  }
+  if (index == m_current_model_index)
+    return;
+
+  spdlog::info("Loading model: {}", m_gltf_models[index]);
+  m_device->wait_idle();
+
+  // Clear existing scene resources
+  m_material_descriptors.clear();
+  m_scene.reset();
+  m_mesh.reset();
+
+  // Load new scene
+  GltfScene scene = load_gltf_scene(*m_device, m_gltf_models[index]);
+  if (!scene.mesh)
+  {
+    spdlog::error("Failed to load model: {}", m_gltf_models[index]);
+    return;
+  }
+
+  // Extract mesh BEFORE moving scene (scene.mesh becomes null after move)
+  m_mesh = std::move(scene.mesh);
+  m_scene = std::move(scene);
+
+  spdlog::info("Loaded glTF scene: {} vertices, {} indices, {} primitives, {} materials",
+    m_mesh->vertex_count(), m_mesh->index_count(), m_scene->primitives.size(),
+    m_scene->materials.size());
+
+  // Rebuild descriptors for new materials
+  create_descriptor();
+
+  // Rebuild acceleration structures if RT is available
+  if (m_device->supports_ray_tracing() && m_blas)
+  {
+    m_blas.reset();
+    m_tlas.reset();
+    build_acceleration_structures();
+  }
+
+  m_current_model_index = index;
 }
 
 void Application::apply_shader_mode(int mode)

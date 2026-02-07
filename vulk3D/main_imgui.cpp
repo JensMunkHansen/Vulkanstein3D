@@ -12,6 +12,7 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <filesystem>
 #include <string>
 
 using namespace sps::vulkan;
@@ -116,6 +117,33 @@ int main(int argc, char* argv[])
       }
       ImGui::SameLine();
       ImGui::TextDisabled("(off = Immediate)");
+    }
+
+    if (!app.gltf_models().empty() && ImGui::CollapsingHeader("Models", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+      const auto& models = app.gltf_models();
+      int selected = app.current_model_index();
+
+      // Build display name from current selection
+      std::string preview = (selected >= 0 && selected < static_cast<int>(models.size()))
+        ? std::filesystem::path(models[selected]).stem().string()
+        : "(none)";
+
+      if (ImGui::BeginCombo("Model", preview.c_str()))
+      {
+        for (int i = 0; i < static_cast<int>(models.size()); i++)
+        {
+          std::string label = std::filesystem::path(models[i]).stem().string();
+          bool is_selected = (selected == i);
+          if (ImGui::Selectable(label.c_str(), is_selected))
+          {
+            app.load_model(i);
+          }
+          if (is_selected)
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
     }
 
     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen))

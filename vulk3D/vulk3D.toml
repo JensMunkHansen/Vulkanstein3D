@@ -104,6 +104,7 @@ files = [
 # https://www.khronos.org/gltf/
 [glTFmodels]
 files = [
-	"assets/models/inexor/5_objects.gltf",
-#	"assets/models/inexor-logo/inexor_logo.gltf",
+      "../../data/DamagedHelmet/DamagedHelmet.glb",
+      "../../data/CompareMetallic/glTF/CompareMetallic.gltf",
+      "../../data/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
 ]
