@@ -48,30 +48,33 @@ vk::PipelineLayout make_pipeline_layout(
 }
 
 vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageFormat,
-  bool depthEnabled, vk::Format depthFormat, bool debug)
+  bool depthEnabled, vk::Format depthFormat, bool debug,
+  vk::SampleCountFlagBits msaaSamples)
 {
+  const bool msaa = msaaSamples != vk::SampleCountFlagBits::e1;
   std::vector<vk::AttachmentDescription> attachments;
 
-  // Color attachment
+  // Attachment 0: Color attachment
   vk::AttachmentDescription colorAttachment = {};
   colorAttachment.flags = vk::AttachmentDescriptionFlags();
   colorAttachment.format = swapchainImageFormat;
-  colorAttachment.samples = vk::SampleCountFlagBits::e1;
+  colorAttachment.samples = msaaSamples;
   colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
-  colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+  colorAttachment.storeOp = msaa ? vk::AttachmentStoreOp::eDontCare : vk::AttachmentStoreOp::eStore;
   colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
   colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
   colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
-  colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+  colorAttachment.finalLayout =
+    msaa ? vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::ePresentSrcKHR;
   attachments.push_back(colorAttachment);
 
-  // Depth attachment (optional)
+  // Attachment 1: Depth attachment (optional)
   vk::AttachmentDescription depthAttachment = {};
   if (depthEnabled)
   {
     depthAttachment.flags = vk::AttachmentDescriptionFlags();
     depthAttachment.format = depthFormat;
-    depthAttachment.samples = vk::SampleCountFlagBits::e1;
+    depthAttachment.samples = msaaSamples;
     depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
     depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
     depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
@@ -79,6 +82,21 @@ vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageForma
     depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
     depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
     attachments.push_back(depthAttachment);
+  }
+
+  // Attachment 2 (MSAA only): Resolve attachment (single-sample swapchain image)
+  if (msaa)
+  {
+    vk::AttachmentDescription resolveAttachment = {};
+    resolveAttachment.format = swapchainImageFormat;
+    resolveAttachment.samples = vk::SampleCountFlagBits::e1;
+    resolveAttachment.loadOp = vk::AttachmentLoadOp::eDontCare;
+    resolveAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    resolveAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    resolveAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    resolveAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    resolveAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+    attachments.push_back(resolveAttachment);
   }
 
   // Color attachment reference
@@ -91,6 +109,11 @@ vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageForma
   depthAttachmentRef.attachment = 1;
   depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
 
+  // Resolve attachment reference (MSAA only)
+  vk::AttachmentReference resolveAttachmentRef = {};
+  resolveAttachmentRef.attachment = depthEnabled ? 2u : 1u;
+  resolveAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
   // Subpass
   vk::SubpassDescription subpass = {};
   subpass.flags = vk::SubpassDescriptionFlags();
@@ -100,6 +123,10 @@ vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageForma
   if (depthEnabled)
   {
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
+  }
+  if (msaa)
+  {
+    subpass.pResolveAttachments = &resolveAttachmentRef;
   }
 
   // Subpass dependency
@@ -208,7 +235,7 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   rasterizer.lineWidth = 1.0f;
   rasterizer.cullMode =
     specification.backfaceCulling ? vk::CullModeFlagBits::eBack : vk::CullModeFlagBits::eNone;
-  rasterizer.frontFace = vk::FrontFace::eClockwise;
+  rasterizer.frontFace = vk::FrontFace::eCounterClockwise;
   rasterizer.depthBiasEnable = VK_FALSE; // Depth bias can be useful in shadow maps.
   pipelineInfo.pRasterizationState = &rasterizer;
 
@@ -233,7 +260,7 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   vk::PipelineMultisampleStateCreateInfo multisampling = {};
   multisampling.flags = vk::PipelineMultisampleStateCreateFlags();
   multisampling.sampleShadingEnable = VK_FALSE;
-  multisampling.rasterizationSamples = vk::SampleCountFlagBits::e1;
+  multisampling.rasterizationSamples = specification.msaaSamples;
   pipelineInfo.pMultisampleState = &multisampling;
 
   // Depth Stencil
@@ -318,7 +345,7 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
       std::cout << "Create RenderPass" << std::endl;
     }
     renderpass = make_renderpass(specification.device, specification.swapchainImageFormat,
-      specification.depthTestEnabled, specification.depthFormat, debug);
+      specification.depthTestEnabled, specification.depthFormat, debug, specification.msaaSamples);
     ownsRenderPass = true;
   }
   pipelineInfo.renderPass = renderpass;
@@ -329,6 +356,10 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
     vk::DynamicState::eViewport,
     vk::DynamicState::eScissor
   };
+  if (specification.dynamicCullMode)
+  {
+    dynamicStates.push_back(vk::DynamicState::eCullModeEXT);
+  }
   vk::PipelineDynamicStateCreateInfo dynamicState = {};
   dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
   dynamicState.pDynamicStates = dynamicStates.data();

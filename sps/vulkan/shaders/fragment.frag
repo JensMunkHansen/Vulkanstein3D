@@ -42,7 +42,7 @@ layout(push_constant) uniform PushConstants {
   float metallicFactor;  //  4 bytes
   float roughnessFactor; //  4 bytes
   float alphaCutoff;     //  4 bytes
-  uint alphaMode;        //  4 bytes  0=OPAQUE, 1=MASK, 2=BLEND
+  uint alphaMode;        //  4 bytes  bits[1:0]=0 OPAQUE,1 MASK,2 BLEND; bit[2]=doubleSided
 } pc;
 
 layout(location = 0) in vec3 fragColor;
@@ -217,8 +217,9 @@ void main()
   // View direction
   vec3 V = normalize(ubo.viewPos.xyz - fragPos);
 
-  // Two-sided lighting (flip normal if facing away from viewer)
-  if (dot(N, V) < 0.0) {
+  // Two-sided normal handling (Khronos glTF-Sample-Viewer approach)
+  bool doubleSided = (pc.alphaMode & 4u) != 0u;
+  if (doubleSided && !gl_FrontFacing) {
     N = -N;
   }
 
@@ -341,11 +342,12 @@ void main()
   color = linearToSRGB(color);
 
   // Alpha mode handling (late discard per Khronos reference)
-  if (pc.alphaMode == 1u) {
+  uint alphaModeValue = pc.alphaMode & 3u;  // Mask off doubleSided bit
+  if (alphaModeValue == 1u) {
     // MASK: discard fragments below cutoff
     if (baseColor.a < pc.alphaCutoff) discard;
     outColor = vec4(color, 1.0);
-  } else if (pc.alphaMode == 2u) {
+  } else if (alphaModeValue == 2u) {
     // BLEND: output with alpha for blending
     outColor = vec4(color, baseColor.a);
   } else {

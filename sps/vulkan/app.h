@@ -87,6 +87,7 @@ public:
   [[nodiscard]] VkQueue vk_graphics_queue() const;
   [[nodiscard]] uint32_t graphics_queue_family() const;
   [[nodiscard]] VkRenderPass vk_renderpass() const { return m_renderpass; }
+  [[nodiscard]] VkSampleCountFlagBits msaa_samples() const { return static_cast<VkSampleCountFlagBits>(m_msaaSamples); }
   [[nodiscard]] VkCommandPool vk_command_pool() const { return m_commandPool; }
   [[nodiscard]] uint32_t swapchain_image_count() const;
   [[nodiscard]] GLFWwindow* glfw_window() const;
@@ -177,6 +178,7 @@ public:
 private:
   void setup_camera();
   void create_depth_resources();
+  void create_msaa_color_resources();
   void create_uniform_buffer();
   void create_debug_2d_pipeline();
   void create_light_indicator();
@@ -211,6 +213,12 @@ private:
   // 2D debug pipeline (fullscreen quad)
   vk::Pipeline m_debug_2d_pipeline;
   vk::PipelineLayout m_debug_2d_pipelineLayout;
+
+  // MSAA
+  vk::SampleCountFlagBits m_msaaSamples{ vk::SampleCountFlagBits::e1 };
+  vk::Image m_msaaColorImage{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_msaaColorImageMemory{ VK_NULL_HANDLE };
+  vk::ImageView m_msaaColorImageView{ VK_NULL_HANDLE };
 
   // Depth buffer
   vk::Image m_depthImage;

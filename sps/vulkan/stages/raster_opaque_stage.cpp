@@ -39,12 +39,16 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
       if (mat.alphaMode == AlphaMode::Blend)
         continue; // Skip blend primitives — handled by RasterBlendStage
 
+      // Per-material back-face culling: cull back faces unless material is double-sided
+      ctx.command_buffer.setCullModeEXT(
+        mat.doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack);
+
       pc.model = prim.modelMatrix;
       pc.baseColorFactor = mat.baseColorFactor;
       pc.metallicFactor = mat.metallicFactor;
       pc.roughnessFactor = mat.roughnessFactor;
       pc.alphaCutoff = mat.alphaCutoff;
-      pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
+      pc.alphaMode = static_cast<uint32_t>(mat.alphaMode) | (mat.doubleSided ? 4u : 0u);
 
       ctx.command_buffer.pushConstants(ctx.pipeline_layout,
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
@@ -58,6 +62,7 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
   {
     // Legacy single-draw path: opaque defaults
     ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+    ctx.command_buffer.setCullModeEXT(vk::CullModeFlagBits::eBack);
 
     pc.model = glm::mat4(1.0f);
     pc.baseColorFactor = glm::vec4(1.0f);

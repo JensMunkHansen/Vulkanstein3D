@@ -251,6 +251,19 @@ Application::Application(int argc, char** argv)
   // Setup camera
   setup_camera();
 
+  // Clamp MSAA to device maximum
+  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+  {
+    auto maxSamples = m_device->max_usable_sample_count();
+    if (m_msaaSamples > maxSamples)
+    {
+      spdlog::warn("Requested MSAA {}x exceeds device max {}x, clamping",
+        static_cast<int>(m_msaaSamples), static_cast<int>(maxSamples));
+      m_msaaSamples = maxSamples;
+    }
+    spdlog::info("MSAA enabled: {}x", static_cast<int>(m_msaaSamples));
+  }
+
   // Create scene manager and load initial scene
   m_scene_manager = std::make_unique<SceneManager>(*m_device);
   m_scene_manager->create_defaults(m_hdr_file);
@@ -258,6 +271,12 @@ Application::Application(int argc, char** argv)
 
   // Create depth buffer
   create_depth_resources();
+
+  // Create MSAA color image (if MSAA enabled)
+  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+  {
+    create_msaa_color_resources();
+  }
 
   // Create uniform buffer and descriptor
   create_uniform_buffer();
@@ -362,6 +381,22 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   m_backfaceCulling = toml::find_or<bool>(
     renderer_configuration, "application", "rendering", "backface_culling", true);
   spdlog::trace("Backface culling: {}", m_backfaceCulling);
+
+  // MSAA sample count (will be clamped to device max after device creation)
+  {
+    int msaa_config = toml::find_or<int>(
+      renderer_configuration, "application", "rendering", "msaa_samples", 4);
+    // Convert integer to SampleCountFlagBits
+    switch (msaa_config)
+    {
+      case 2: m_msaaSamples = vk::SampleCountFlagBits::e2; break;
+      case 4: m_msaaSamples = vk::SampleCountFlagBits::e4; break;
+      case 8: m_msaaSamples = vk::SampleCountFlagBits::e8; break;
+      case 16: m_msaaSamples = vk::SampleCountFlagBits::e16; break;
+      default: m_msaaSamples = vk::SampleCountFlagBits::e1; break;
+    }
+    spdlog::trace("MSAA samples (config): {}", msaa_config);
+  }
 
   // Rendering mode (raytracing or rasterization)
   auto render_mode = toml::find_or<std::string>(
@@ -516,7 +551,7 @@ void Application::create_depth_resources()
   imageInfo.tiling = vk::ImageTiling::eOptimal;
   imageInfo.initialLayout = vk::ImageLayout::eUndefined;
   imageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
-  imageInfo.samples = vk::SampleCountFlagBits::e1;
+  imageInfo.samples = m_msaaSamples;
   imageInfo.sharingMode = vk::SharingMode::eExclusive;
 
   m_depthImage = m_device->device().createImage(imageInfo);
@@ -547,6 +582,54 @@ void Application::create_depth_resources()
   m_depthImageView = m_device->device().createImageView(viewInfo);
 
   spdlog::trace("Created depth buffer {}x{}", extent.width, extent.height);
+}
+
+void Application::create_msaa_color_resources()
+{
+  vk::Extent2D extent = m_swapchain->extent();
+
+  vk::ImageCreateInfo imageInfo{};
+  imageInfo.imageType = vk::ImageType::e2D;
+  imageInfo.extent.width = extent.width;
+  imageInfo.extent.height = extent.height;
+  imageInfo.extent.depth = 1;
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.format = m_swapchain->image_format();
+  imageInfo.tiling = vk::ImageTiling::eOptimal;
+  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+  imageInfo.usage =
+    vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
+  imageInfo.samples = m_msaaSamples;
+  imageInfo.sharingMode = vk::SharingMode::eExclusive;
+
+  m_msaaColorImage = m_device->device().createImage(imageInfo);
+
+  vk::MemoryRequirements memRequirements =
+    m_device->device().getImageMemoryRequirements(m_msaaColorImage);
+
+  vk::MemoryAllocateInfo allocInfo{};
+  allocInfo.allocationSize = memRequirements.size;
+  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+    memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+  m_msaaColorImageMemory = m_device->device().allocateMemory(allocInfo);
+  m_device->device().bindImageMemory(m_msaaColorImage, m_msaaColorImageMemory, 0);
+
+  vk::ImageViewCreateInfo viewInfo{};
+  viewInfo.image = m_msaaColorImage;
+  viewInfo.viewType = vk::ImageViewType::e2D;
+  viewInfo.format = m_swapchain->image_format();
+  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  m_msaaColorImageView = m_device->device().createImageView(viewInfo);
+
+  spdlog::trace("Created MSAA color image {}x{} ({}x samples)", extent.width, extent.height,
+    static_cast<int>(m_msaaSamples));
 }
 
 void Application::create_uniform_buffer()
@@ -1072,6 +1155,17 @@ void Application::recreate_swapchain()
   m_device->device().destroyImage(m_depthImage);
   m_device->device().freeMemory(m_depthImageMemory);
 
+  // 4b. Destroy old MSAA color resources
+  if (m_msaaColorImageView)
+  {
+    m_device->device().destroyImageView(m_msaaColorImageView);
+    m_device->device().destroyImage(m_msaaColorImage);
+    m_device->device().freeMemory(m_msaaColorImageMemory);
+    m_msaaColorImageView = VK_NULL_HANDLE;
+    m_msaaColorImage = VK_NULL_HANDLE;
+    m_msaaColorImageMemory = VK_NULL_HANDLE;
+  }
+
   // 5. Recreate semaphores (old ones may still be referenced by old swapchain presentation)
   m_renderFinished.clear();
 
@@ -1087,6 +1181,12 @@ void Application::recreate_swapchain()
 
   // 8. Recreate depth resources for new size
   create_depth_resources();
+
+  // 8a. Recreate MSAA color resources
+  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+  {
+    create_msaa_color_resources();
+  }
 
   // 8b. Recreate RT storage image if RT is enabled
   if (m_rt_image)
@@ -1120,6 +1220,7 @@ void Application::recreate_swapchain()
   frameBufferInput.renderpass = m_renderpass;
   frameBufferInput.swapchainExtent = m_swapchain->extent();
   frameBufferInput.depthImageView = m_depthImageView;
+  frameBufferInput.msaaColorImageView = m_msaaColorImageView;
   m_frameBuffers = sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
 
   // Update camera aspect ratio
@@ -1237,10 +1338,14 @@ void Application::make_pipeline(
 
   // Rasterizer options
   specification.backfaceCulling = m_backfaceCulling;
+  specification.dynamicCullMode = true;
 
   // Depth testing
   specification.depthTestEnabled = m_depthTestEnabled;
   specification.depthFormat = m_depthFormat;
+
+  // MSAA
+  specification.msaaSamples = m_msaaSamples;
 
   // Push constant: model(64) + baseColorFactor(16) + metallicFactor(4) + roughnessFactor(4) + alphaCutoff(4) + alphaMode(4) = 96 bytes
   vk::PushConstantRange pcRange{
@@ -1292,6 +1397,9 @@ void Application::create_debug_2d_pipeline()
   specification.existingRenderPass = m_renderpass;
   specification.depthTestEnabled = false; // We won't write depth, but pass is compatible
   specification.depthFormat = m_depthFormat;
+
+  // MSAA must match render pass
+  specification.msaaSamples = m_msaaSamples;
 
   sps::vulkan::GraphicsPipelineOutBundle output =
     sps::vulkan::create_graphics_pipeline(specification, true);
@@ -1655,6 +1763,14 @@ Application::~Application()
   m_device->device().destroyImage(m_depthImage);
   m_device->device().freeMemory(m_depthImageMemory);
 
+  // Destroy MSAA color resources
+  if (m_msaaColorImageView)
+  {
+    m_device->device().destroyImageView(m_msaaColorImageView);
+    m_device->device().destroyImage(m_msaaColorImage);
+    m_device->device().freeMemory(m_msaaColorImageMemory);
+  }
+
   // Destroy RT resources
   m_rt_pipeline.reset();
   m_tlas.reset();
@@ -1684,6 +1800,7 @@ void Application::finalize_setup()
   frameBufferInput.renderpass = m_renderpass;
   frameBufferInput.swapchainExtent = m_swapchain->extent();
   frameBufferInput.depthImageView = m_depthImageView;
+  frameBufferInput.msaaColorImageView = m_msaaColorImageView;
 
   m_frameBuffers = sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
 

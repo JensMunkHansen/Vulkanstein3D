@@ -15,7 +15,8 @@ struct framebufferInput
   vk::Device device;
   vk::RenderPass renderpass;
   vk::Extent2D swapchainExtent;
-  vk::ImageView depthImageView{ VK_NULL_HANDLE }; // Optional depth attachment
+  vk::ImageView depthImageView{ VK_NULL_HANDLE };     // Optional depth attachment
+  vk::ImageView msaaColorImageView{ VK_NULL_HANDLE }; // Optional MSAA color attachment
 };
 
 /**

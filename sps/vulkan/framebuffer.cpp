@@ -23,12 +23,26 @@ std::vector<vk::Framebuffer> make_framebuffers(framebufferInput inputChunk, //
 
   for (size_t i = 0; i < swapchain.image_count(); i++)
   {
-    std::vector<vk::ImageView> attachments = { swapchain.image_views()[i] };
+    std::vector<vk::ImageView> attachments;
 
-    // Add depth attachment if provided (shared across all framebuffers)
-    if (inputChunk.depthImageView)
+    if (inputChunk.msaaColorImageView)
     {
-      attachments.push_back(inputChunk.depthImageView);
+      // MSAA layout: [msaaColor, depth, resolve(swapchain)]
+      attachments.push_back(inputChunk.msaaColorImageView);
+      if (inputChunk.depthImageView)
+      {
+        attachments.push_back(inputChunk.depthImageView);
+      }
+      attachments.push_back(swapchain.image_views()[i]);
+    }
+    else
+    {
+      // Non-MSAA layout: [swapchain, depth]
+      attachments.push_back(swapchain.image_views()[i]);
+      if (inputChunk.depthImageView)
+      {
+        attachments.push_back(inputChunk.depthImageView);
+      }
     }
     vk::FramebufferCreateInfo framebufferInfo;
     framebufferInfo.flags = vk::FramebufferCreateFlags();

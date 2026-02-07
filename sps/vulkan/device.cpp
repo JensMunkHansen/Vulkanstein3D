@@ -455,6 +455,9 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   // Build list of extensions (required + optional ray tracing)
   std::vector<const char*> extensions_to_enable(required_extensions.begin(), required_extensions.end());
 
+  // Extended dynamic state (for per-draw cull mode)
+  extensions_to_enable.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+
   // Add ray tracing extensions if supported and requested
   if (enable_ray_tracing && m_ray_tracing_capabilities.supported)
   {
@@ -469,6 +472,10 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
 
     spdlog::trace("Enabling ray tracing extensions");
   }
+
+  // Extended dynamic state features (for per-draw cull mode)
+  vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures{};
+  extendedDynamicStateFeatures.extendedDynamicState = VK_TRUE;
 
   // Create device with extended features for ray tracing
   vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
@@ -488,10 +495,13 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
     extensions_to_enable.size(), extensions_to_enable.data(),                     //
     &m_enabled_features);
 
+  // Always chain extended dynamic state features
+  deviceInfo.pNext = &extendedDynamicStateFeatures;
+
   // Chain ray tracing features if enabled
   if (enable_ray_tracing && m_ray_tracing_capabilities.supported)
   {
-    deviceInfo.pNext = &rtPipelineFeatures;
+    extendedDynamicStateFeatures.pNext = &rtPipelineFeatures;
   }
 
   try
@@ -583,6 +593,21 @@ RayTracingCapabilities Device::query_ray_tracing_capabilities(vk::PhysicalDevice
   spdlog::trace("  - Shader group handle size: {}", caps.shaderGroupHandleSize);
 
   return caps;
+}
+
+vk::SampleCountFlagBits Device::max_usable_sample_count() const
+{
+  auto props = m_physical_device.getProperties();
+  auto counts = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts;
+
+  for (auto s : { vk::SampleCountFlagBits::e64, vk::SampleCountFlagBits::e32,
+         vk::SampleCountFlagBits::e16, vk::SampleCountFlagBits::e8,
+         vk::SampleCountFlagBits::e4, vk::SampleCountFlagBits::e2 })
+  {
+    if (counts & s)
+      return s;
+  }
+  return vk::SampleCountFlagBits::e1;
 }
 
 uint32_t Device::find_memory_type(

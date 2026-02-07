@@ -57,12 +57,16 @@ void RasterBlendStage::record(const FrameContext& ctx)
   {
     const auto& mat = ctx.scene->materials[prim->materialIndex];
 
+    // Per-material back-face culling: cull back faces unless material is double-sided
+    ctx.command_buffer.setCullModeEXT(
+      mat.doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack);
+
     pc.model = prim->modelMatrix;
     pc.baseColorFactor = mat.baseColorFactor;
     pc.metallicFactor = mat.metallicFactor;
     pc.roughnessFactor = mat.roughnessFactor;
     pc.alphaCutoff = mat.alphaCutoff;
-    pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
+    pc.alphaMode = static_cast<uint32_t>(mat.alphaMode) | (mat.doubleSided ? 4u : 0u);
 
     ctx.command_buffer.pushConstants(ctx.pipeline_layout,
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,

@@ -26,6 +26,7 @@ struct GraphicsPipelineInBundle
 
   // Rasterizer options
   bool backfaceCulling{ true };
+  bool dynamicCullMode{ false };
 
   // Depth testing
   bool depthTestEnabled{ false };
@@ -43,6 +44,9 @@ struct GraphicsPipelineInBundle
 
   // Push constant ranges
   std::vector<vk::PushConstantRange> pushConstantRanges;
+
+  // MSAA sample count (e1 = no MSAA)
+  vk::SampleCountFlagBits msaaSamples{ vk::SampleCountFlagBits::e1 };
 };
 
 /**
@@ -60,7 +64,9 @@ vk::PipelineLayout make_pipeline_layout(vk::Device device,
   vk::DescriptorSetLayout descriptorSetLayout,
   const std::vector<vk::PushConstantRange>& pushConstantRanges, bool debug);
 
-vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageFormat, bool debug);
+vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageFormat,
+  bool depthEnabled, vk::Format depthFormat, bool debug,
+  vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1);
 
 GraphicsPipelineOutBundle create_graphics_pipeline(
   GraphicsPipelineInBundle& specification, bool debug);

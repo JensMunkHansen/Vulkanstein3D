@@ -143,6 +143,9 @@ public:
   /// Check if ray tracing is available on this device
   [[nodiscard]] bool supports_ray_tracing() const { return m_ray_tracing_capabilities.supported; }
 
+  /// Query the maximum usable MSAA sample count (intersection of color and depth)
+  [[nodiscard]] vk::SampleCountFlagBits max_usable_sample_count() const;
+
   void begin_debug_label(vk::CommandBuffer cmd, const std::string& name,
     std::array<float, 4> color = { 1.0f, 1.0f, 1.0f, 1.0f }) const;
   void end_debug_label(vk::CommandBuffer cmd) const;

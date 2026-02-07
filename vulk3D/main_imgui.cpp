@@ -62,7 +62,7 @@ int main(int argc, char* argv[])
   init_info.Subpass = 0;
   init_info.MinImageCount = 2;
   init_info.ImageCount = app.swapchain_image_count();
-  init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+  init_info.MSAASamples = app.msaa_samples();
   init_info.Allocator = nullptr;
   init_info.CheckVkResultFn = check_vk_result;
 

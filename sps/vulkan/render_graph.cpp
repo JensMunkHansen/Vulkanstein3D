@@ -40,9 +40,11 @@ void RenderGraph::record(const FrameContext& ctx)
     renderPassInfo.renderArea.offset.y = 0;
     renderPassInfo.renderArea.extent = ctx.extent;
 
-    std::array<vk::ClearValue, 2> clearValues{};
+    // 3 clear values: color, depth, resolve (extra values are ignored when not using MSAA)
+    std::array<vk::ClearValue, 3> clearValues{};
     clearValues[0].color = vk::ClearColorValue{ std::array<float, 4>{ 1.0f, 0.5f, 0.25f, 1.0f } };
     clearValues[1].depthStencil = vk::ClearDepthStencilValue{ 1.0f, 0 };
+    clearValues[2].color = vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } };
     renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
     renderPassInfo.pClearValues = clearValues.data();
 
