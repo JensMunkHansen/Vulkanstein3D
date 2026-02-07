@@ -99,6 +99,8 @@ struct SceneMaterial
   std::unique_ptr<Texture> emissiveTexture;
   std::unique_ptr<Texture> aoTexture;
   glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+  float metallicFactor{1.0f};
+  float roughnessFactor{1.0f};
   AlphaMode alphaMode{AlphaMode::Opaque};
   float alphaCutoff{0.5f};
   bool doubleSided{false};

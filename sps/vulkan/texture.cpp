@@ -13,11 +13,12 @@ namespace sps::vulkan
 {
 
 Texture::Texture(const Device& device, const std::string& name, const uint8_t* pixels,
-  uint32_t width, uint32_t height)
+  uint32_t width, uint32_t height, bool linear)
   : m_device(&device)
   , m_name(name)
   , m_width(width)
   , m_height(height)
+  , m_format(linear ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb)
 {
   create_image();
   create_image_view();
@@ -27,9 +28,11 @@ Texture::Texture(const Device& device, const std::string& name, const uint8_t* p
   spdlog::trace("Created texture '{}' ({}x{})", name, width, height);
 }
 
-Texture::Texture(const Device& device, const std::string& name, const std::string& filepath)
+Texture::Texture(const Device& device, const std::string& name, const std::string& filepath,
+  bool linear)
   : m_device(&device)
   , m_name(name)
+  , m_format(linear ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb)
 {
   // Load image with stb_image
   int width, height, channels;
@@ -98,6 +101,7 @@ Texture::Texture(Texture&& other) noexcept
   , m_sampler(other.m_sampler)
   , m_width(other.m_width)
   , m_height(other.m_height)
+  , m_format(other.m_format)
 {
   other.m_device = nullptr;
   other.m_image = VK_NULL_HANDLE;
@@ -135,6 +139,7 @@ Texture& Texture::operator=(Texture&& other) noexcept
     m_sampler = other.m_sampler;
     m_width = other.m_width;
     m_height = other.m_height;
+    m_format = other.m_format;
 
     // Invalidate other
     other.m_device = nullptr;
@@ -160,7 +165,7 @@ void Texture::create_image()
   image_info.extent.depth = 1;
   image_info.mipLevels = 1;
   image_info.arrayLayers = 1;
-  image_info.format = vk::Format::eR8G8B8A8Srgb;
+  image_info.format = m_format;
   image_info.tiling = vk::ImageTiling::eOptimal;
   image_info.initialLayout = vk::ImageLayout::eUndefined;
   image_info.usage = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
@@ -190,7 +195,7 @@ void Texture::create_image_view()
   vk::ImageViewCreateInfo view_info{};
   view_info.image = m_image;
   view_info.viewType = vk::ImageViewType::e2D;
-  view_info.format = vk::Format::eR8G8B8A8Srgb;
+  view_info.format = m_format;
   view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
   view_info.subresourceRange.baseMipLevel = 0;
   view_info.subresourceRange.levelCount = 1;

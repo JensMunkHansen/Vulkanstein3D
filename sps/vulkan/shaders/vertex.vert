@@ -27,6 +27,8 @@ layout(location = 4) in vec4 inTangent;  // xyz=tangent, w=handedness
 layout(push_constant) uniform PushConstants {
   mat4 model;            // 64 bytes (vertex stage)
   vec4 baseColorFactor;  // 16 bytes (fragment stage)
+  float metallicFactor;  //  4 bytes (fragment stage)
+  float roughnessFactor; //  4 bytes (fragment stage)
   float alphaCutoff;     //  4 bytes (fragment stage)
   uint alphaMode;        //  4 bytes (fragment stage) 0=OPAQUE, 1=MASK, 2=BLEND
 } pc;
@@ -54,13 +56,20 @@ void main()
 
   // Compute TBN matrix for normal mapping
   // Reference: https://learnopengl.com/Advanced-Lighting/Normal-Mapping
-  vec3 T = normalize(normalMatrix * inTangent.xyz);
   vec3 N = fragNormal;
-  // Re-orthogonalize T with respect to N (Gram-Schmidt)
-  T = normalize(T - dot(T, N) * N);
-  // Bitangent: cross product with handedness from tangent.w
-  vec3 B = cross(N, T) * inTangent.w;
 
-  // TBN transforms from tangent space to world space
-  fragTBN = mat3(T, B, N);
+  if (dot(inTangent.xyz, inTangent.xyz) > 0.001) {
+    // Mesh provides tangent data
+    vec3 T = normalize(normalMatrix * inTangent.xyz);
+    // Re-orthogonalize T with respect to N (Gram-Schmidt)
+    T = normalize(T - dot(T, N) * N);
+    // Bitangent: cross product with handedness from tangent.w
+    vec3 B = cross(N, T) * inTangent.w;
+    fragTBN = mat3(T, B, N);
+  } else {
+    // No tangent data — construct arbitrary TBN from normal
+    vec3 T = abs(N.y) < 0.99 ? normalize(cross(N, vec3(0,1,0))) : normalize(cross(N, vec3(1,0,0)));
+    vec3 B = cross(N, T);
+    fragTBN = mat3(T, B, N);
+  }
 }

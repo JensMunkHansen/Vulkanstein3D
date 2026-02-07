@@ -10,11 +10,13 @@ namespace sps::vulkan
 
 void RasterOpaqueStage::record(const FrameContext& ctx)
 {
-  // Push constant struct matching shader layout (88 bytes)
+  // Push constant struct matching shader layout (96 bytes)
   struct PushConstants
   {
     glm::mat4 model;
     glm::vec4 baseColorFactor;
+    float metallicFactor;
+    float roughnessFactor;
     float alphaCutoff;
     uint32_t alphaMode;
   } pc{};
@@ -39,6 +41,8 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
 
       pc.model = prim.modelMatrix;
       pc.baseColorFactor = mat.baseColorFactor;
+      pc.metallicFactor = mat.metallicFactor;
+      pc.roughnessFactor = mat.roughnessFactor;
       pc.alphaCutoff = mat.alphaCutoff;
       pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
 
@@ -57,6 +61,8 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
 
     pc.model = glm::mat4(1.0f);
     pc.baseColorFactor = glm::vec4(1.0f);
+    pc.metallicFactor = 1.0f;
+    pc.roughnessFactor = 1.0f;
     pc.alphaCutoff = 0.5f;
     pc.alphaMode = 0; // OPAQUE
 

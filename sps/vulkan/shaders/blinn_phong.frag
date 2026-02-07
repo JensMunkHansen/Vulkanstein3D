@@ -52,22 +52,17 @@ void main()
   vec3 normal;
 
   if (ubo.flags.x > 0.5) {
-    // Normal mapping enabled
+    // Normal mapping enabled (UNORM format — no sRGB conversion)
     vec3 normalMap = texture(normalTexture, fragTexCoord).rgb;
     normalMap = normalMap * 2.0 - 1.0;
-
-    if (abs(normalMap.x) < 0.01 && abs(normalMap.y) < 0.01 && normalMap.z > 0.98) {
-      normal = normalize(fragNormal);
-    } else {
-      normal = normalize(fragTBN * normalMap);
-    }
+    normal = normalize(fragTBN * normalMap);
   } else {
     normal = normalize(fragNormal);
   }
 
-  // Sample base color texture and convert from sRGB to linear
+  // Sample base color texture (sRGB format — GPU converts to linear automatically)
   vec4 texColor = texture(baseColorTexture, fragTexCoord);
-  vec3 albedo = sRGBToLinear(texColor.rgb);
+  vec3 albedo = texColor.rgb;
 
   // Use texture color if available, otherwise vertex color
   if (texColor.r > 0.99 && texColor.g > 0.99 && texColor.b > 0.99) {

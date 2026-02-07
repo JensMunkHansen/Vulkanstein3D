@@ -27,14 +27,18 @@ public:
   /// @param pixels Pointer to RGBA8 pixel data.
   /// @param width Image width in pixels.
   /// @param height Image height in pixels.
+  /// @param linear If true, use R8G8B8A8_UNORM (for normal/metallic/AO data).
+  ///               If false (default), use R8G8B8A8_SRGB (for color textures).
   Texture(const Device& device, const std::string& name, const uint8_t* pixels, uint32_t width,
-    uint32_t height);
+    uint32_t height, bool linear = false);
 
   /// @brief Create texture from file (PNG, JPEG, etc.).
   /// @param device The Vulkan device wrapper.
   /// @param name Debug name for the texture.
   /// @param filepath Path to the image file.
-  Texture(const Device& device, const std::string& name, const std::string& filepath);
+  /// @param linear If true, use R8G8B8A8_UNORM. If false (default), use R8G8B8A8_SRGB.
+  Texture(const Device& device, const std::string& name, const std::string& filepath,
+    bool linear = false);
 
   ~Texture();
 
@@ -72,6 +76,7 @@ private:
 
   uint32_t m_width{ 0 };
   uint32_t m_height{ 0 };
+  vk::Format m_format{ vk::Format::eR8G8B8A8Srgb };
 
   void create_image();
   void create_image_view();

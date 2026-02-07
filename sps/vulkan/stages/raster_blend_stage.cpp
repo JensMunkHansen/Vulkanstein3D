@@ -39,11 +39,13 @@ void RasterBlendStage::record(const FrameContext& ctx)
       return aView.z < bView.z; // more negative Z = farther = draw first
     });
 
-  // Push constant struct matching shader layout (88 bytes)
+  // Push constant struct matching shader layout (96 bytes)
   struct PushConstants
   {
     glm::mat4 model;
     glm::vec4 baseColorFactor;
+    float metallicFactor;
+    float roughnessFactor;
     float alphaCutoff;
     uint32_t alphaMode;
   } pc{};
@@ -57,6 +59,8 @@ void RasterBlendStage::record(const FrameContext& ctx)
 
     pc.model = prim->modelMatrix;
     pc.baseColorFactor = mat.baseColorFactor;
+    pc.metallicFactor = mat.metallicFactor;
+    pc.roughnessFactor = mat.roughnessFactor;
     pc.alphaCutoff = mat.alphaCutoff;
     pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
 

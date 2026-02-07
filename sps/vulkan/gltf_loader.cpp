@@ -480,7 +480,7 @@ std::unique_ptr<Texture> extract_normal_texture(
 
       std::string tex_name = image->name ? image->name : "embedded_normal";
       auto tex = std::make_unique<Texture>(device, tex_name, pixels,
-        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
 
       stbi_image_free(pixels);
 
@@ -512,7 +512,7 @@ std::unique_ptr<Texture> extract_normal_texture(
 
       try
       {
-        auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string());
+        auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string(), true);
         spdlog::info("Loaded normal texture: {} from {}", tex_name, tex_path.string());
         return tex;
       }
@@ -586,7 +586,7 @@ std::unique_ptr<Texture> extract_metallic_roughness_texture(
 
       std::string tex_name = image->name ? image->name : "embedded_metallic_roughness";
       auto tex = std::make_unique<Texture>(device, tex_name, pixels,
-        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
 
       stbi_image_free(pixels);
 
@@ -618,7 +618,7 @@ std::unique_ptr<Texture> extract_metallic_roughness_texture(
 
       try
       {
-        auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string());
+        auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string(), true);
         spdlog::info("Loaded metallic/roughness texture: {} from {}", tex_name, tex_path.string());
         return tex;
       }
@@ -783,7 +783,7 @@ std::unique_ptr<Texture> extract_ao_texture(
 
       std::string tex_name = image->name ? image->name : "embedded_ao";
       auto tex = std::make_unique<Texture>(device, tex_name, pixels,
-        static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+        static_cast<uint32_t>(width), static_cast<uint32_t>(height), true);
 
       stbi_image_free(pixels);
 
@@ -815,7 +815,7 @@ std::unique_ptr<Texture> extract_ao_texture(
 
       try
       {
-        auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string());
+        auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string(), true);
         spdlog::info("Loaded AO texture: {} from {}", tex_name, tex_path.string());
         return tex;
       }
@@ -886,9 +886,11 @@ namespace
 
 /// @brief Generic texture extraction from a cgltf_texture_view.
 /// Works for any texture slot (base color, normal, metallic/roughness, emissive, AO).
+/// @param linear If true, create texture with UNORM format (for data textures like normal/MR/AO).
 std::unique_ptr<Texture> extract_texture(
   const cgltf_texture_view& tex_view, const Device& device,
-  const std::filesystem::path& base_path, const std::string& slot_name)
+  const std::filesystem::path& base_path, const std::string& slot_name,
+  bool linear = false)
 {
   if (!tex_view.texture || !tex_view.texture->image)
   {
@@ -917,7 +919,7 @@ std::unique_ptr<Texture> extract_texture(
 
     std::string tex_name = image->name ? image->name : ("embedded_" + slot_name);
     auto tex = std::make_unique<Texture>(device, tex_name, pixels,
-      static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+      static_cast<uint32_t>(width), static_cast<uint32_t>(height), linear);
 
     stbi_image_free(pixels);
 
@@ -946,7 +948,7 @@ std::unique_ptr<Texture> extract_texture(
 
     try
     {
-      auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string());
+      auto tex = std::make_unique<Texture>(device, tex_name, tex_path.string(), linear);
       spdlog::info("Loaded {} texture: {} from {}", slot_name, tex_name, tex_path.string());
       return tex;
     }
@@ -1016,20 +1018,23 @@ void traverse_nodes(
               device, base_path, "baseColor");
             scene_mat.metallicRoughnessTexture = extract_texture(
               primitive.material->pbr_metallic_roughness.metallic_roughness_texture,
-              device, base_path, "metallicRoughness");
+              device, base_path, "metallicRoughness", true);
           }
           scene_mat.normalTexture = extract_texture(
-            primitive.material->normal_texture, device, base_path, "normal");
+            primitive.material->normal_texture, device, base_path, "normal", true);
           scene_mat.emissiveTexture = extract_texture(
             primitive.material->emissive_texture, device, base_path, "emissive");
           scene_mat.aoTexture = extract_texture(
-            primitive.material->occlusion_texture, device, base_path, "ao");
+            primitive.material->occlusion_texture, device, base_path, "ao", true);
 
           // Extract material scalar properties
           if (primitive.material->has_pbr_metallic_roughness)
           {
-            const auto& bcf = primitive.material->pbr_metallic_roughness.base_color_factor;
+            const auto& pbr = primitive.material->pbr_metallic_roughness;
+            const auto& bcf = pbr.base_color_factor;
             scene_mat.baseColorFactor = glm::vec4(bcf[0], bcf[1], bcf[2], bcf[3]);
+            scene_mat.metallicFactor = pbr.metallic_factor;
+            scene_mat.roughnessFactor = pbr.roughness_factor;
           }
           switch (primitive.material->alpha_mode)
           {

@@ -28,13 +28,14 @@ void SceneManager::create_defaults(const std::string& hdr_file)
 
   // Create default 1x1 flat normal texture (pointing up in tangent space: 0,0,1 -> RGB 128,128,255)
   const uint8_t flat_normal[] = { 128, 128, 255, 255 };
-  m_defaultNormalTexture = std::make_unique<Texture>(m_device, "default normal", flat_normal, 1, 1);
+  m_defaultNormalTexture =
+    std::make_unique<Texture>(m_device, "default normal", flat_normal, 1, 1, true);
 
-  // Create default 1x1 metallic/roughness texture (non-metallic, medium roughness)
-  // glTF format: G=roughness, B=metallic
-  const uint8_t default_mr[] = { 255, 128, 0, 255 };
+  // Create default 1x1 metallic/roughness texture (white = pass-through for scalar factors)
+  // glTF spec: final value = texture * factor, so default texture must be 1.0
+  const uint8_t default_mr[] = { 255, 255, 255, 255 };
   m_defaultMetallicRoughness =
-    std::make_unique<Texture>(m_device, "default metallic/roughness", default_mr, 1, 1);
+    std::make_unique<Texture>(m_device, "default metallic/roughness", default_mr, 1, 1, true);
 
   // Create default 1x1 emissive texture (black = no emission)
   const uint8_t default_emissive[] = { 0, 0, 0, 255 };
@@ -43,7 +44,7 @@ void SceneManager::create_defaults(const std::string& hdr_file)
 
   // Create default 1x1 AO texture (white = no occlusion)
   const uint8_t default_ao[] = { 255, 255, 255, 255 };
-  m_defaultAO = std::make_unique<Texture>(m_device, "default ao", default_ao, 1, 1);
+  m_defaultAO = std::make_unique<Texture>(m_device, "default ao", default_ao, 1, 1, true);
 
   // Create IBL from HDR environment map
   try

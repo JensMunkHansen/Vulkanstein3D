@@ -1242,9 +1242,9 @@ void Application::make_pipeline(
   specification.depthTestEnabled = m_depthTestEnabled;
   specification.depthFormat = m_depthFormat;
 
-  // Push constant: model(64) + baseColorFactor(16) + alphaCutoff(4) + alphaMode(4) = 88 bytes
+  // Push constant: model(64) + baseColorFactor(16) + metallicFactor(4) + roughnessFactor(4) + alphaCutoff(4) + alphaMode(4) = 96 bytes
   vk::PushConstantRange pcRange{
-    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 88
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 96
   };
   specification.pushConstantRanges = { pcRange };
 

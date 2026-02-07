@@ -39,6 +39,8 @@ layout(set = 0, binding = 8) uniform samplerCube prefilterMap;    // Specular IB
 layout(push_constant) uniform PushConstants {
   mat4 model;            // 64 bytes (vertex stage)
   vec4 baseColorFactor;  // 16 bytes
+  float metallicFactor;  //  4 bytes
+  float roughnessFactor; //  4 bytes
   float alphaCutoff;     //  4 bytes
   uint alphaMode;        //  4 bytes  0=OPAQUE, 1=MASK, 2=BLEND
 } pc;
@@ -149,26 +151,19 @@ void main()
 
   if (ubo.flags.x > 0.5) {
     // Normal mapping enabled - sample and transform
+    // Normal texture uses UNORM format (no sRGB conversion by GPU)
     vec3 normalMap = texture(normalTexture, fragTexCoord).rgb;
     normalMap = normalMap * 2.0 - 1.0;  // Decode from [0,1] to [-1,1]
-
-    // Check if we have a valid normal map (not default flat blue)
-    if (abs(normalMap.x) < 0.01 && abs(normalMap.y) < 0.01 && normalMap.z > 0.98) {
-      // Flat normal map - use vertex normal
-      N = normalize(fragNormal);
-    } else {
-      // Transform normal from tangent space to world space
-      N = normalize(fragTBN * normalMap);
-    }
+    N = normalize(fragTBN * normalMap);
   } else {
     // Normal mapping disabled - use vertex normal
     N = normalize(fragNormal);
   }
 
-  // Sample base color texture, apply material factor, convert from sRGB to linear
+  // Sample base color texture (sRGB format — GPU converts to linear automatically)
   vec4 texColor = texture(baseColorTexture, fragTexCoord);
   vec4 baseColor = texColor * pc.baseColorFactor;
-  vec3 albedo = sRGBToLinear(baseColor.rgb);
+  vec3 albedo = baseColor.rgb;
 
   // Use texture color if available (non-white), otherwise use vertex color
   if (texColor.r > 0.99 && texColor.g > 0.99 && texColor.b > 0.99 &&
@@ -178,9 +173,10 @@ void main()
   }
 
   // Sample metallic/roughness texture (glTF format: G=roughness, B=metallic)
+  // Multiply by material factors per glTF spec
   vec4 mrSample = texture(metallicRoughnessTexture, fragTexCoord);
-  float perceptualRoughness = mrSample.g;  // Green channel = perceptual roughness
-  float metallic = mrSample.b;              // Blue channel = metallic
+  float perceptualRoughness = mrSample.g * pc.roughnessFactor;
+  float metallic = mrSample.b * pc.metallicFactor;
 
   // Sample ambient occlusion (glTF stores AO in R channel)
   float ao = texture(aoTexture, fragTexCoord).r;
@@ -298,7 +294,7 @@ void main()
   // Add emissive (before tone mapping for HDR glow effect)
   // Reference: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-material
   if (useEmissive) {
-    color += sRGBToLinear(emissive);  // Emissive is also in sRGB
+    color += emissive;  // Emissive texture is sRGB format — GPU converts to linear on sample
   }
 
   // Apply exposure
