@@ -397,6 +397,22 @@ void Application::load_toml_configuration_file(const std::string& file_name)
   }
   spdlog::trace("glTF model list: {} entries, current index: {}", m_gltf_models.size(), m_current_model_index);
 
+  // HDR environment list (for runtime switching)
+  if (renderer_configuration.contains("HDRenvironments"))
+  {
+    const auto& hdr_section = toml::find(renderer_configuration, "HDRenvironments");
+    m_hdr_files = toml::find_or<std::vector<std::string>>(hdr_section, "files", {});
+  }
+  for (int i = 0; i < static_cast<int>(m_hdr_files.size()); ++i)
+  {
+    if (m_hdr_files[i] == m_hdr_file)
+    {
+      m_current_hdr_index = i;
+      break;
+    }
+  }
+  spdlog::trace("HDR environment list: {} entries, current index: {}", m_hdr_files.size(), m_current_hdr_index);
+
   // Lighting options
   try
   {
@@ -1555,6 +1571,21 @@ void Application::load_model(int index)
   }
 
   m_current_model_index = index;
+}
+
+void Application::load_hdr(int index)
+{
+  if (index < 0 || index >= static_cast<int>(m_hdr_files.size()))
+  {
+    spdlog::warn("Invalid HDR index: {}", index);
+    return;
+  }
+  if (index == m_current_hdr_index)
+    return;
+
+  m_device->wait_idle();
+  m_scene_manager->load_hdr(m_hdr_files[index], m_uniform_buffer->buffer());
+  m_current_hdr_index = index;
 }
 
 void Application::apply_shader_mode(int mode)

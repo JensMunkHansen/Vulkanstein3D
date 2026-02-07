@@ -303,4 +303,33 @@ void SceneManager::set_ibl_intensity(float v)
     m_ibl->set_intensity(v);
 }
 
+void SceneManager::load_hdr(const std::string& hdr_file, vk::Buffer uniform_buffer)
+{
+  spdlog::info("Loading HDR environment: {}", hdr_file);
+
+  float old_intensity = ibl_intensity();
+
+  try
+  {
+    if (!hdr_file.empty())
+    {
+      m_ibl = std::make_unique<IBL>(m_device, hdr_file, 128);
+    }
+    else
+    {
+      m_ibl = std::make_unique<IBL>(m_device);
+    }
+  }
+  catch (const std::exception& e)
+  {
+    spdlog::warn("Failed to load HDR '{}': {} - using neutral environment", hdr_file, e.what());
+    m_ibl = std::make_unique<IBL>(m_device);
+  }
+
+  m_ibl->set_intensity(old_intensity);
+
+  // Rebuild descriptors with new IBL textures
+  create_descriptors(uniform_buffer);
+}
+
 } // namespace sps::vulkan

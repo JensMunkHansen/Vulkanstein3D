@@ -108,3 +108,10 @@ files = [
       "../../data/CompareMetallic/glTF/CompareMetallic.gltf",
       "../../data/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
 ]
+
+[HDRenvironments]
+files = [
+      "../../data/neutral.hdr",
+      "../../data/footprint_court.hdr",
+      "../../data/lightroom_14b.hdr",
+]

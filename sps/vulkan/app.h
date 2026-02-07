@@ -63,6 +63,8 @@ private:
   std::string m_hdr_file;   // From TOML: application.geometry.hdr_file
   std::vector<std::string> m_gltf_models;  // From TOML: [glTFmodels].files
   int m_current_model_index = -1;          // Index into m_gltf_models (-1 = none)
+  std::vector<std::string> m_hdr_files;   // From TOML: [HDRenvironments].files
+  int m_current_hdr_index = -1;           // Index into m_hdr_files (-1 = none)
 
 public:
   Application(int argc, char* argv[]);
@@ -119,6 +121,11 @@ public:
   const std::vector<std::string>& gltf_models() const { return m_gltf_models; }
   int current_model_index() const { return m_current_model_index; }
   void load_model(int index);
+
+  // HDR environment switching
+  const std::vector<std::string>& hdr_files() const { return m_hdr_files; }
+  int current_hdr_index() const { return m_current_hdr_index; }
+  void load_hdr(int index);
 
   // Shader management
   const std::string& current_vertex_shader() const { return m_vertex_shader_path; }

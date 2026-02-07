@@ -51,6 +51,9 @@ public:
   /// Runtime model switch. Caller must call device.wait_idle() first.
   LoadResult load_model(const std::string& path, vk::Buffer uniform_buffer);
 
+  /// Switch HDR environment. Caller must call device.wait_idle() first.
+  void load_hdr(const std::string& hdr_file, vk::Buffer uniform_buffer);
+
   // Read-only accessors
   [[nodiscard]] const Mesh* mesh() const;
   [[nodiscard]] Mesh* mesh(); // non-const needed for RT vertex/index buffer

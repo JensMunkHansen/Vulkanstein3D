@@ -171,6 +171,32 @@ int main(int argc, char* argv[])
           if (ImGui::SliderFloat("IBL Intensity", &ibl_intensity, 0.0f, 3.0f)) {
             app.set_ibl_intensity(ibl_intensity);
           }
+
+          // HDR environment selector
+          if (!app.hdr_files().empty())
+          {
+            const auto& hdrs = app.hdr_files();
+            int hdr_selected = app.current_hdr_index();
+            std::string hdr_preview = (hdr_selected >= 0 && hdr_selected < static_cast<int>(hdrs.size()))
+              ? std::filesystem::path(hdrs[hdr_selected]).stem().string()
+              : "(none)";
+
+            if (ImGui::BeginCombo("Environment", hdr_preview.c_str()))
+            {
+              for (int i = 0; i < static_cast<int>(hdrs.size()); i++)
+              {
+                std::string label = std::filesystem::path(hdrs[i]).stem().string();
+                bool is_selected = (hdr_selected == i);
+                if (ImGui::Selectable(label.c_str(), is_selected))
+                {
+                  app.load_hdr(i);
+                }
+                if (is_selected)
+                  ImGui::SetItemDefaultFocus();
+              }
+              ImGui::EndCombo();
+            }
+          }
         } else {
           // Fake ambient controls (only when IBL is disabled)
           ImGui::SliderFloat("Metal Ambient", &app.metallic_ambient(), 0.0f, 1.0f);
