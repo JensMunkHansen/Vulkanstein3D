@@ -970,7 +970,8 @@ void traverse_nodes(
   std::vector<uint32_t>& all_indices,
   std::vector<ScenePrimitive>& primitives,
   std::vector<SceneMaterial>& materials,
-  std::unordered_map<const cgltf_material*, uint32_t>& material_map)
+  std::unordered_map<const cgltf_material*, uint32_t>& material_map,
+  AABB& bounds)
 {
   // Compute world transform for this node
   float m[16];
@@ -1136,6 +1137,10 @@ void traverse_nodes(
         Vertex v;
         v.position = glm::vec3(positions[i * 3 + 0], positions[i * 3 + 1], positions[i * 3 + 2]);
 
+        // Expand world-space bounding box
+        glm::vec3 world_pos = glm::vec3(model_matrix * glm::vec4(v.position, 1.0f));
+        bounds.expand(world_pos);
+
         if (!normals.empty())
           v.normal = glm::vec3(normals[i * 3 + 0], normals[i * 3 + 1], normals[i * 3 + 2]);
         else
@@ -1209,7 +1214,7 @@ void traverse_nodes(
   for (size_t i = 0; i < node->children_count; ++i)
   {
     traverse_nodes(node->children[i], data, device, base_path,
-      all_vertices, all_indices, primitives, materials, material_map);
+      all_vertices, all_indices, primitives, materials, material_map, bounds);
   }
 }
 
@@ -1257,7 +1262,8 @@ GltfScene load_gltf_scene(const Device& device, const std::string& filepath)
     for (size_t n = 0; n < gltf_scene.nodes_count; ++n)
     {
       traverse_nodes(gltf_scene.nodes[n], data, device, base_path,
-        all_vertices, all_indices, scene.primitives, scene.materials, material_map);
+        all_vertices, all_indices, scene.primitives, scene.materials, material_map,
+        scene.bounds);
     }
   }
 

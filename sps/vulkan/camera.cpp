@@ -1,5 +1,7 @@
 #include <sps/vulkan/camera.h>
 
+#include <spdlog/spdlog.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -262,10 +264,18 @@ void Camera::reset_camera(const float bounds[6])
 
   // Reset clipping range
   reset_clipping_range(bounds);
+
+  spdlog::info("reset_camera: center=({},{},{}), size=({},{},{}), radius={}, distance={}, "
+    "pos=({},{},{}), dir=({},{},{}), near={}, far={}, fov={}",
+    center.x, center.y, center.z, size.x, size.y, size.z, radius, distance,
+    m_position.x, m_position.y, m_position.z,
+    direction.x, direction.y, direction.z,
+    m_near_plane, m_far_plane, m_view_angle);
 }
 
 void Camera::reset_clipping_range(const float bounds[6])
 {
+  // Use bounding sphere for rotation-invariant clipping range.
   glm::vec3 center(
     (bounds[0] + bounds[1]) * 0.5f,
     (bounds[2] + bounds[3]) * 0.5f,
@@ -277,10 +287,10 @@ void Camera::reset_clipping_range(const float bounds[6])
     bounds[5] - bounds[4]);
 
   float radius = glm::length(size) * 0.5f;
-  float dist = distance();
+  float dist = glm::length(m_position - center);
 
   m_near_plane = std::max(0.001f, dist - radius);
-  m_far_plane = dist + radius;
+  m_far_plane = std::max(m_near_plane + 0.001f, dist + radius);
 }
 
 //-----------------------------------------------------------------------------
@@ -311,8 +321,8 @@ glm::mat4 Camera::projection_matrix() const
 
   if (m_use_vulkan_clip)
   {
-    // Vulkan clip space: Y is inverted, Z is [0,1] instead of [-1,1]
-    // GLM_FORCE_DEPTH_ZERO_TO_ONE handles Z, but we still need to flip Y
+    // Vulkan clip space: Y is inverted compared to OpenGL.
+    // GLM_FORCE_DEPTH_ZERO_TO_ONE (set in CMakeLists.txt) handles Z [0,1].
     proj[1][1] *= -1.0f;
   }
 

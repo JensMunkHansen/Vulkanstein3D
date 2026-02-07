@@ -110,6 +110,7 @@ add_library(${TARGET_NAME}
   fence.cpp
   frame.cpp
   app.cpp
+  scene_manager.cpp
   shaders.cpp
   semaphore.cpp
   exception.cpp
@@ -161,6 +162,7 @@ target_link_libraries(${TARGET_NAME}
 # This MUST be defined before any vulkan.hpp includes
 target_compile_definitions(${TARGET_NAME}
   PUBLIC VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+  PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE
 )
 
 target_compile_options(

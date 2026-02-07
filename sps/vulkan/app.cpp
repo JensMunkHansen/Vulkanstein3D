@@ -7,9 +7,7 @@
 #include <sps/tools/cla_parser.hpp>
 #include <sps/vulkan/app.h>
 #include <sps/vulkan/debug_constants.h>
-#include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/meta.hpp>
-#include <sps/vulkan/ply_loader.h>
 #include <sps/vulkan/screenshot.h>
 
 #include <fstream>
@@ -253,8 +251,10 @@ Application::Application(int argc, char** argv)
   // Setup camera
   setup_camera();
 
-  // Create default triangle mesh (or load PLY from command line later)
-  create_default_mesh();
+  // Create scene manager and load initial scene
+  m_scene_manager = std::make_unique<SceneManager>(*m_device);
+  m_scene_manager->create_defaults(m_hdr_file);
+  auto load_result = m_scene_manager->load_initial_scene(m_geometry_source, m_gltf_file, m_ply_file);
 
   // Create depth buffer
   create_depth_resources();
@@ -262,10 +262,18 @@ Application::Application(int argc, char** argv)
   // Create uniform buffer and descriptor
   create_uniform_buffer();
 
-  create_descriptor();
+  m_scene_manager->create_descriptors(m_uniform_buffer->buffer());
 
   // Make pipeline (needs descriptor layout and vertex format)
   make_pipeline();
+
+  // Reset camera to frame loaded scene
+  if (load_result.success && load_result.bounds.valid())
+  {
+    float bounds[6];
+    load_result.bounds.to_bounds(bounds);
+    m_camera.reset_camera(bounds);
+  }
 
   finalize_setup();
 
@@ -476,106 +484,6 @@ void Application::setup_camera()
   m_camera.set_aspect_ratio(static_cast<float>(width) / static_cast<float>(height));
 }
 
-void Application::create_default_mesh()
-{
-  // Create default 1x1 white texture for fallback
-  const uint8_t white_pixel[] = { 255, 255, 255, 255 };
-  m_defaultTexture = std::make_unique<Texture>(*m_device, "default white", white_pixel, 1, 1);
-
-  // Create default 1x1 flat normal texture (pointing up in tangent space: 0,0,1 -> RGB 128,128,255)
-  // Reference: https://docs.unity3d.com/Manual/StandardShaderMaterialParameterNormalMap.html
-  const uint8_t flat_normal[] = { 128, 128, 255, 255 };
-  m_defaultNormalTexture =
-    std::make_unique<Texture>(*m_device, "default normal", flat_normal, 1, 1);
-
-  // Create default 1x1 metallic/roughness texture (non-metallic, medium roughness)
-  // glTF format: G=roughness, B=metallic (R and A unused, set to white for visibility)
-  // Default: roughness=0.5 (128), metallic=0 (0)
-  const uint8_t default_mr[] = { 255, 128, 0,
-    255 }; // R=unused, G=roughness(0.5), B=metallic(0), A=unused
-  m_defaultMetallicRoughness =
-    std::make_unique<Texture>(*m_device, "default metallic/roughness", default_mr, 1, 1);
-
-  // Create default 1x1 emissive texture (black = no emission)
-  const uint8_t default_emissive[] = { 0, 0, 0, 255 };
-  m_defaultEmissive =
-    std::make_unique<Texture>(*m_device, "default emissive", default_emissive, 1, 1);
-
-  // Create default 1x1 AO texture (white = no occlusion)
-  // glTF stores AO in R channel, but we sample all channels for simplicity
-  const uint8_t default_ao[] = { 255, 255, 255, 255 };
-  m_defaultAO = std::make_unique<Texture>(*m_device, "default ao", default_ao, 1, 1);
-
-  // Create IBL from HDR environment map
-  try {
-    if (!m_hdr_file.empty()) {
-      m_ibl = std::make_unique<IBL>(*m_device, m_hdr_file, 128);
-    } else {
-      m_ibl = std::make_unique<IBL>(*m_device);
-    }
-  } catch (const std::exception& e) {
-    spdlog::warn("Failed to load HDR '{}': {} - using neutral environment", m_hdr_file, e.what());
-    m_ibl = std::make_unique<IBL>(*m_device);
-  }
-
-  // Check geometry source from config
-  if (m_geometry_source == "gltf" && !m_gltf_file.empty())
-  {
-    // Load glTF scene with per-primitive materials and transforms
-    GltfScene scene = load_gltf_scene(*m_device, m_gltf_file);
-
-    if (scene.mesh)
-    {
-      m_mesh = std::move(scene.mesh);
-
-      // Store scene for multi-material rendering (textures stay in scene.materials)
-      m_scene = std::move(scene);
-
-      spdlog::info(
-        "Loaded glTF scene from {}: {} vertices, {} indices, {} primitives, {} materials",
-        m_gltf_file, m_mesh->vertex_count(), m_mesh->index_count(), m_scene->primitives.size(),
-        m_scene->materials.size());
-
-      // Adjust camera for the mesh
-      m_camera.set_position(0.0f, 0.0f, 5.0f);
-      m_camera.set_focal_point(0.0f, 0.0f, 0.0f);
-      m_camera.set_clipping_range(0.1f, 100.0f);
-      return;
-    }
-
-    spdlog::warn("Could not load glTF from {}, falling back to triangle", m_gltf_file);
-  }
-  else if (m_geometry_source == "ply" && !m_ply_file.empty())
-  {
-    // Try to load PLY file from config path
-    m_mesh = load_ply(*m_device, m_ply_file);
-
-    if (m_mesh)
-    {
-      spdlog::info("Loaded PLY mesh from {}: {} vertices, {} indices", m_ply_file,
-        m_mesh->vertex_count(), m_mesh->index_count());
-
-      // Adjust camera for the mesh (it may be larger than our triangle)
-      m_camera.set_position(0.0f, 0.0f, 100.0f);
-      m_camera.set_focal_point(0.0f, 0.0f, 0.0f);
-      m_camera.set_clipping_range(1.0f, 500.0f);
-      return;
-    }
-
-    spdlog::warn("Could not load PLY from {}, falling back to triangle", m_ply_file);
-  }
-
-  // Default triangle
-  std::vector<Vertex> vertices = {
-    { { 0.0f, -0.5f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f } }, // Bottom - red
-    { { 0.5f, 0.5f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f } },  // Right - green
-    { { -0.5f, 0.5f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } }  // Left - blue
-  };
-
-  m_mesh = std::make_unique<Mesh>(*m_device, "default triangle", vertices);
-  spdlog::trace("Created default triangle mesh");
-}
-
 void Application::create_depth_resources()
 {
   vk::Extent2D extent = m_swapchain->extent();
@@ -630,95 +538,6 @@ void Application::create_uniform_buffer()
   m_uniform_buffer =
     std::make_unique<UniformBuffer<UniformBufferObject>>(*m_device, "camera uniform buffer");
   spdlog::trace("Created uniform buffer");
-}
-
-void Application::create_descriptor()
-{
-  // Choose textures: use loaded if available, otherwise defaults
-  Texture* colorTex = m_baseColorTexture ? m_baseColorTexture.get() : m_defaultTexture.get();
-  Texture* normalTex = m_normalTexture ? m_normalTexture.get() : m_defaultNormalTexture.get();
-  Texture* mrTex = m_metallicRoughnessTexture ? m_metallicRoughnessTexture.get()
-                                              : m_defaultMetallicRoughness.get();
-  Texture* emissiveTex = m_emissiveTexture ? m_emissiveTexture.get() : m_defaultEmissive.get();
-  Texture* aoTex = m_aoTexture ? m_aoTexture.get() : m_defaultAO.get();
-
-  DescriptorBuilder builder(*m_device);
-  builder.add_uniform_buffer<UniformBufferObject>(m_uniform_buffer->buffer(), 0,
-    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(
-    colorTex->image_view(), colorTex->sampler(), 1, vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(
-    normalTex->image_view(), normalTex->sampler(), 2, vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(
-    mrTex->image_view(), mrTex->sampler(), 3, vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(
-    emissiveTex->image_view(), emissiveTex->sampler(), 4, vk::ShaderStageFlagBits::eFragment);
-  builder.add_combined_image_sampler(
-    aoTex->image_view(), aoTex->sampler(), 5, vk::ShaderStageFlagBits::eFragment);
-
-  // IBL textures (bindings 6, 7, 8)
-  if (m_ibl)
-  {
-    builder.add_combined_image_sampler(
-      m_ibl->brdf_lut_view(), m_ibl->brdf_lut_sampler(), 6, vk::ShaderStageFlagBits::eFragment);
-    builder.add_combined_image_sampler(
-      m_ibl->irradiance_view(), m_ibl->irradiance_sampler(), 7, vk::ShaderStageFlagBits::eFragment);
-    builder.add_combined_image_sampler(m_ibl->prefiltered_view(), m_ibl->prefiltered_sampler(), 8,
-      vk::ShaderStageFlagBits::eFragment);
-  }
-
-  m_descriptor = std::make_unique<ResourceDescriptor>(builder.build("camera descriptor"));
-  spdlog::trace("Created descriptor with PBR texture bindings + IBL");
-
-  // Create per-material descriptors for scene graph rendering
-  if (m_scene && !m_scene->materials.empty())
-  {
-    m_material_descriptors.clear();
-
-    for (size_t i = 0; i < m_scene->materials.size(); ++i)
-    {
-      const auto& mat = m_scene->materials[i];
-
-      Texture* matColor =
-        mat.baseColorTexture ? mat.baseColorTexture.get() : m_defaultTexture.get();
-      Texture* matNormal =
-        mat.normalTexture ? mat.normalTexture.get() : m_defaultNormalTexture.get();
-      Texture* matMR = mat.metallicRoughnessTexture ? mat.metallicRoughnessTexture.get()
-                                                    : m_defaultMetallicRoughness.get();
-      Texture* matEmissive =
-        mat.emissiveTexture ? mat.emissiveTexture.get() : m_defaultEmissive.get();
-      Texture* matAO = mat.aoTexture ? mat.aoTexture.get() : m_defaultAO.get();
-
-      DescriptorBuilder mat_builder(*m_device);
-      mat_builder.add_uniform_buffer<UniformBufferObject>(m_uniform_buffer->buffer(), 0,
-        vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
-      mat_builder.add_combined_image_sampler(
-        matColor->image_view(), matColor->sampler(), 1, vk::ShaderStageFlagBits::eFragment);
-      mat_builder.add_combined_image_sampler(
-        matNormal->image_view(), matNormal->sampler(), 2, vk::ShaderStageFlagBits::eFragment);
-      mat_builder.add_combined_image_sampler(
-        matMR->image_view(), matMR->sampler(), 3, vk::ShaderStageFlagBits::eFragment);
-      mat_builder.add_combined_image_sampler(
-        matEmissive->image_view(), matEmissive->sampler(), 4, vk::ShaderStageFlagBits::eFragment);
-      mat_builder.add_combined_image_sampler(
-        matAO->image_view(), matAO->sampler(), 5, vk::ShaderStageFlagBits::eFragment);
-
-      if (m_ibl)
-      {
-        mat_builder.add_combined_image_sampler(
-          m_ibl->brdf_lut_view(), m_ibl->brdf_lut_sampler(), 6, vk::ShaderStageFlagBits::eFragment);
-        mat_builder.add_combined_image_sampler(m_ibl->irradiance_view(),
-          m_ibl->irradiance_sampler(), 7, vk::ShaderStageFlagBits::eFragment);
-        mat_builder.add_combined_image_sampler(m_ibl->prefiltered_view(),
-          m_ibl->prefiltered_sampler(), 8, vk::ShaderStageFlagBits::eFragment);
-      }
-
-      m_material_descriptors.push_back(
-        std::make_unique<ResourceDescriptor>(mat_builder.build("material_" + std::to_string(i))));
-    }
-
-    spdlog::info("Created {} per-material descriptors", m_material_descriptors.size());
-  }
 }
 
 void Application::create_rt_storage_image()
@@ -832,12 +651,12 @@ void Application::create_rt_descriptor()
   bufferInfo.range = sizeof(UniformBufferObject);
 
   vk::DescriptorBufferInfo vertexBufferInfo{};
-  vertexBufferInfo.buffer = m_mesh->vertex_buffer();
+  vertexBufferInfo.buffer = m_scene_manager->mesh()->vertex_buffer();
   vertexBufferInfo.offset = 0;
   vertexBufferInfo.range = VK_WHOLE_SIZE;
 
   vk::DescriptorBufferInfo indexBufferInfo{};
-  indexBufferInfo.buffer = m_mesh->index_buffer();
+  indexBufferInfo.buffer = m_scene_manager->mesh()->index_buffer();
   indexBufferInfo.offset = 0;
   indexBufferInfo.range = VK_WHOLE_SIZE;
 
@@ -895,7 +714,7 @@ void Application::create_rt_pipeline()
 
 void Application::build_acceleration_structures()
 {
-  if (!m_device->supports_ray_tracing() || !m_mesh)
+  if (!m_device->supports_ray_tracing() || !m_scene_manager->mesh())
   {
     spdlog::warn("Cannot build acceleration structures: RT not supported or no mesh");
     return;
@@ -916,7 +735,7 @@ void Application::build_acceleration_structures()
 
   // Build BLAS
   m_blas = std::make_unique<AccelerationStructure>(*m_device, "mesh BLAS");
-  m_blas->build_blas(cmd, *m_mesh);
+  m_blas->build_blas(cmd, *m_scene_manager->mesh());
 
   // Build TLAS
   m_tlas = std::make_unique<AccelerationStructure>(*m_device, "scene TLAS");
@@ -941,6 +760,14 @@ void Application::build_acceleration_structures()
 
 void Application::update_uniform_buffer()
 {
+  // Keep clipping range in sync with camera distance to scene
+  if (m_scene_manager->bounds().valid())
+  {
+    float bounds[6];
+    m_scene_manager->bounds().to_bounds(bounds);
+    m_camera.reset_clipping_range(bounds);
+  }
+
   UniformBufferObject ubo{};
 
   // Rasterization matrices (with Vulkan Y-flip)
@@ -983,7 +810,7 @@ void Application::update_uniform_buffer()
       m_use_ao ? 1.0f : 0.0f, m_exposure);
 
     // IBL parameters: x=useIBL, y=intensity, z=tonemapMode, w=reserved
-    ubo.ibl_params = glm::vec4(m_use_ibl ? 1.0f : 0.0f, m_ibl ? m_ibl->intensity() : 1.0f,
+    ubo.ibl_params = glm::vec4(m_use_ibl ? 1.0f : 0.0f, m_scene_manager->ibl_intensity(),
       static_cast<float>(m_tonemap_mode), 0.0f);
   }
 
@@ -1162,11 +989,11 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.render_pass = m_renderpass;
   ctx.framebuffer = m_frameBuffers[imageIndex];
   ctx.pipeline_layout = m_pipelineLayout;
-  ctx.mesh = m_mesh.get();
-  ctx.scene = m_scene ? &*m_scene : nullptr;
+  ctx.mesh = m_scene_manager->mesh();
+  ctx.scene = m_scene_manager->scene();
   ctx.camera = &m_camera;
-  ctx.default_descriptor = m_descriptor.get();
-  ctx.material_descriptors = &m_material_descriptors;
+  ctx.default_descriptor = m_scene_manager->default_descriptor();
+  ctx.material_descriptors = &m_scene_manager->material_descriptors();
   ctx.swapchain = m_swapchain.get();
 
   m_render_graph.record(ctx);
@@ -1384,7 +1211,7 @@ void Application::make_pipeline(
   specification.fragmentFilepath = fragment_shader;
   specification.swapchainExtent = m_swapchain->extent();
   specification.swapchainImageFormat = m_swapchain->image_format();
-  specification.descriptorSetLayout = m_descriptor->layout();
+  specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
 
   // Set vertex input format
   auto binding = Vertex::binding_description();
@@ -1436,7 +1263,7 @@ void Application::create_debug_2d_pipeline()
   specification.fragmentFilepath = SHADER_DIR "debug_texture2d.spv";
   specification.swapchainExtent = m_swapchain->extent();
   specification.swapchainImageFormat = m_swapchain->image_format();
-  specification.descriptorSetLayout = m_descriptor->layout();
+  specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
 
   // No vertex input - fullscreen quad generates vertices in shader
   // vertexBindings and vertexAttributes left empty
@@ -1706,34 +1533,20 @@ void Application::load_model(int index)
   if (index == m_current_model_index)
     return;
 
-  spdlog::info("Loading model: {}", m_gltf_models[index]);
   m_device->wait_idle();
-
-  // Clear existing scene resources
-  m_material_descriptors.clear();
-  m_scene.reset();
-  m_mesh.reset();
-
-  // Load new scene
-  GltfScene scene = load_gltf_scene(*m_device, m_gltf_models[index]);
-  if (!scene.mesh)
-  {
-    spdlog::error("Failed to load model: {}", m_gltf_models[index]);
+  auto result = m_scene_manager->load_model(m_gltf_models[index], m_uniform_buffer->buffer());
+  if (!result.success)
     return;
+
+  // Camera reset
+  if (result.bounds.valid())
+  {
+    float bounds[6];
+    result.bounds.to_bounds(bounds);
+    m_camera.reset_camera(bounds);
   }
 
-  // Extract mesh BEFORE moving scene (scene.mesh becomes null after move)
-  m_mesh = std::move(scene.mesh);
-  m_scene = std::move(scene);
-
-  spdlog::info("Loaded glTF scene: {} vertices, {} indices, {} primitives, {} materials",
-    m_mesh->vertex_count(), m_mesh->index_count(), m_scene->primitives.size(),
-    m_scene->materials.size());
-
-  // Rebuild descriptors for new materials
-  create_descriptor();
-
-  // Rebuild acceleration structures if RT is available
+  // RT rebuild
   if (m_device->supports_ray_tracing() && m_blas)
   {
     m_blas.reset();
@@ -1787,21 +1600,8 @@ Application::~Application()
   m_renderFinished.clear();
 
   // Destroy resources before device
-  m_material_descriptors.clear();
-  m_scene.reset();
-  m_descriptor.reset();
+  m_scene_manager.reset();
   m_uniform_buffer.reset();
-  m_baseColorTexture.reset();
-  m_normalTexture.reset();
-  m_metallicRoughnessTexture.reset();
-  m_emissiveTexture.reset();
-  m_aoTexture.reset();
-  m_defaultTexture.reset();
-  m_defaultNormalTexture.reset();
-  m_defaultMetallicRoughness.reset();
-  m_defaultEmissive.reset();
-  m_defaultAO.reset();
-  m_mesh.reset();
 
   m_device->device().destroyCommandPool(m_commandPool);
 

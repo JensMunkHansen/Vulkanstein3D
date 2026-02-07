@@ -2,7 +2,6 @@
 #include <ctime>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <sps/vulkan/config.h>
 #include <string>
 
@@ -11,12 +10,12 @@
 #include <sps/vulkan/command_registry.h>
 #include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/gltf_loader.h>
-#include <sps/vulkan/ibl.h>
 #include <sps/vulkan/light.h>
 #include <sps/vulkan/mesh.h>
 #include <sps/vulkan/raytracing_pipeline.h>
 #include <sps/vulkan/render_graph.h>
 #include <sps/vulkan/renderer.h>
+#include <sps/vulkan/scene_manager.h>
 #include <sps/vulkan/texture.h>
 #include <sps/vulkan/uniform_buffer.h>
 #include <vulkan/vulkan_handles.hpp>
@@ -106,12 +105,8 @@ public:
   bool& use_emissive() { return m_use_emissive; }
   bool& use_ao() { return m_use_ao; }
   bool& use_ibl() { return m_use_ibl; }
-  float ibl_intensity() const { return m_ibl ? m_ibl->intensity() : 1.0f; }
-  void set_ibl_intensity(float v)
-  {
-    if (m_ibl)
-      m_ibl->set_intensity(v);
-  }
+  float ibl_intensity() const { return m_scene_manager->ibl_intensity(); }
+  void set_ibl_intensity(float v) { m_scene_manager->set_ibl_intensity(v); }
   int& tonemap_mode() { return m_tonemap_mode; }
   static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)",
     "ACES + Boost", "Khronos PBR Neutral" };
@@ -147,7 +142,7 @@ public:
   } // 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao
   int& debug_channel_mode() { return m_debug_channel_mode; } // 0=RGB, 1=R, 2=G, 3=B, 4=A
   int& debug_material_index() { return m_debug_material_index; }
-  int material_count() const { return static_cast<int>(m_material_descriptors.size()); }
+  int material_count() const { return m_scene_manager->material_count(); }
   float& debug_2d_zoom() { return m_debug_2d_zoom; }
   glm::vec2& debug_2d_pan() { return m_debug_2d_pan; }
   void reset_debug_2d_view()
@@ -174,10 +169,8 @@ public:
 
 private:
   void setup_camera();
-  void create_default_mesh();
   void create_depth_resources();
   void create_uniform_buffer();
-  void create_descriptor();
   void create_debug_2d_pipeline();
   void create_light_indicator();
 
@@ -227,38 +220,15 @@ private:
   // Camera
   Camera m_camera;
 
-  // Mesh
-  std::unique_ptr<Mesh> m_mesh;
+  // Scene manager (owns mesh, scene, textures, IBL, descriptors)
+  std::unique_ptr<SceneManager> m_scene_manager;
 
   // Light indicator (procedural sphere for visualizing point light position)
   std::unique_ptr<Mesh> m_light_indicator_mesh;
   bool m_show_light_indicator{ true };
 
-  // Textures
-  std::unique_ptr<Texture> m_baseColorTexture; // From glTF or nullptr
-  std::unique_ptr<Texture> m_normalTexture;    // From glTF or nullptr
-  std::unique_ptr<Texture>
-    m_metallicRoughnessTexture;                    // From glTF or nullptr (G=roughness, B=metallic)
-  std::unique_ptr<Texture> m_emissiveTexture;      // From glTF or nullptr (RGB glow)
-  std::unique_ptr<Texture> m_aoTexture;            // From glTF or nullptr (R channel)
-  std::unique_ptr<Texture> m_defaultTexture;       // 1x1 white fallback
-  std::unique_ptr<Texture> m_defaultNormalTexture; // 1x1 flat normal fallback
-  std::unique_ptr<Texture> m_defaultMetallicRoughness; // 1x1 default (metallic=0, roughness=0.5)
-  std::unique_ptr<Texture> m_defaultEmissive;          // 1x1 black (no emission)
-  std::unique_ptr<Texture> m_defaultAO;                // 1x1 white (no occlusion)
-
-  // IBL (Image-Based Lighting)
-  std::unique_ptr<IBL> m_ibl;
-
   // Uniform buffer (using wrapper)
   std::unique_ptr<UniformBuffer<UniformBufferObject>> m_uniform_buffer;
-
-  // Descriptor (using wrapper)
-  std::unique_ptr<ResourceDescriptor> m_descriptor;
-
-  // Scene graph (multi-material)
-  std::optional<GltfScene> m_scene;
-  std::vector<std::unique_ptr<ResourceDescriptor>> m_material_descriptors;
 
   // Ray tracing resources
   std::unique_ptr<AccelerationStructure> m_blas;

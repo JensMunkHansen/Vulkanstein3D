@@ -5,6 +5,7 @@
 
 #include <glm/glm.hpp>
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,6 +14,28 @@ namespace sps::vulkan
 {
 
 class Device;
+
+/// @brief Axis-aligned bounding box.
+struct AABB
+{
+  glm::vec3 min{std::numeric_limits<float>::max()};
+  glm::vec3 max{std::numeric_limits<float>::lowest()};
+
+  void expand(const glm::vec3& point)
+  {
+    min = glm::min(min, point);
+    max = glm::max(max, point);
+  }
+
+  [[nodiscard]] bool valid() const { return min.x <= max.x; }
+
+  void to_bounds(float bounds[6]) const
+  {
+    bounds[0] = min.x; bounds[1] = max.x;
+    bounds[2] = min.y; bounds[3] = max.y;
+    bounds[4] = min.z; bounds[5] = max.z;
+  }
+};
 
 /// @brief glTF alpha rendering mode.
 /// @see https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#alpha-coverage
@@ -87,6 +110,7 @@ struct GltfScene
   std::unique_ptr<Mesh> mesh;              // merged vertex/index buffer
   std::vector<SceneMaterial> materials;    // one per glTF material
   std::vector<ScenePrimitive> primitives;  // one per draw call
+  AABB bounds;                             // world-space bounding box
 };
 
 /// @brief Load a glTF 2.0 scene with per-primitive materials and transforms.
