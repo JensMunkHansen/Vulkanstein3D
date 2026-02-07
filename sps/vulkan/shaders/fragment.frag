@@ -123,24 +123,46 @@ float BRDF_specularGGX(float alphaRoughness, float NdotL, float NdotV, float Ndo
 }
 
 // ============================================================================
-// IBL Functions
+// IBL Functions (matching glTF-Sample-Viewer)
+// Reference: https://github.com/KhronosGroup/glTF-Sample-Viewer
 // ============================================================================
 
-vec3 getIBLDiffuse(vec3 N, vec3 albedo, float metallic)
+// Get diffuse irradiance from environment map
+// Our irradiance map stores E(n) = PI * avg(L) from cosine-weighted sampling,
+// Lambertian BRDF = albedo/PI, so we divide by PI here
+vec3 getIBLDiffuseLight(vec3 N)
 {
-  vec3 irradiance = texture(irradianceMap, N).rgb;
-  vec3 diffuse = irradiance * albedo * (1.0 - metallic);
-  return diffuse / PI;
+  return texture(irradianceMap, N).rgb / PI;
 }
 
-vec3 getIBLSpecular(vec3 N, vec3 V, vec3 F0, float perceptualRoughness, float NdotV)
+// Get specular radiance from prefiltered environment map
+vec3 getIBLRadianceGGX(vec3 N, vec3 V, float perceptualRoughness)
 {
   vec3 R = reflect(-V, N);
   const float MAX_REFLECTION_LOD = 4.0;
   float lod = perceptualRoughness * MAX_REFLECTION_LOD;
-  vec3 prefilteredColor = textureLod(prefilterMap, R, lod).rgb;
-  vec2 brdf = texture(brdfLUT, vec2(NdotV, perceptualRoughness)).rg;
-  return prefilteredColor * (F0 * brdf.x + brdf.y);
+  return textureLod(prefilterMap, R, lod).rgb;
+}
+
+// Roughness-dependent Fresnel with multi-scattering correction
+// Reference: Fdez-Aguera, https://bruop.github.io/ibl/#single_scattering_results
+vec3 getIBLGGXFresnel(vec3 N, vec3 V, float roughness, vec3 F0, float specularWeight)
+{
+  float NdotV = clamp(dot(N, V), 0.0, 1.0);
+  vec2 brdfSamplePoint = clamp(vec2(NdotV, roughness), vec2(0.0), vec2(1.0));
+  vec2 f_ab = texture(brdfLUT, brdfSamplePoint).rg;
+
+  // Roughness-dependent Fresnel (Fdez-Aguera)
+  vec3 Fr = max(vec3(1.0 - roughness), F0) - F0;
+  vec3 k_S = F0 + Fr * pow(1.0 - NdotV, 5.0);
+  vec3 FssEss = specularWeight * (k_S * f_ab.x + f_ab.y);
+
+  // Multi-scattering correction (Fdez-Aguera)
+  float Ems = 1.0 - (f_ab.x + f_ab.y);
+  vec3 F_avg = specularWeight * (F0 + (1.0 - F0) / 21.0);
+  vec3 FmsEms = Ems * FssEss * F_avg / (1.0 - F_avg * Ems);
+
+  return FssEss + FmsEms;
 }
 
 void main()
@@ -269,10 +291,21 @@ void main()
   vec3 ambient;
 
   if (useIBL) {
-    // Real IBL using environment maps
-    vec3 iblDiffuse = getIBLDiffuse(N, albedo, metallic);
-    vec3 iblSpecular = getIBLSpecular(N, V, F0, perceptualRoughness, NdotV);
-    ambient = (iblDiffuse + iblSpecular) * iblIntensity;
+    // Energy-conserving IBL (matching glTF-Sample-Viewer)
+    // Reference: https://github.com/KhronosGroup/glTF-Sample-Viewer
+    vec3 f_diffuse_ibl = getIBLDiffuseLight(N) * albedo;
+    vec3 f_specular_ibl = getIBLRadianceGGX(N, V, perceptualRoughness);
+
+    // Metal path: specular only, F0 = baseColor (tinted reflections)
+    vec3 f_metal_fresnel = getIBLGGXFresnel(N, V, perceptualRoughness, albedo, 1.0);
+    vec3 f_metal_brdf = f_metal_fresnel * f_specular_ibl;
+
+    // Dielectric path: energy-conserving mix of diffuse and specular
+    vec3 f_dielectric_fresnel = getIBLGGXFresnel(N, V, perceptualRoughness, f0_dielectric, 1.0);
+    vec3 f_dielectric_brdf = mix(f_diffuse_ibl, f_specular_ibl, f_dielectric_fresnel);
+
+    // Final: blend between dielectric and metal by metallic factor
+    ambient = mix(f_dielectric_brdf, f_metal_brdf, metallic) * iblIntensity;
   } else {
     // Fallback: fake IBL using ambient color
     // For dielectrics: use albedo for ambient diffuse

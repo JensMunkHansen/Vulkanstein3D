@@ -28,6 +28,12 @@ Required extensions:
 - Irradiance map: 32x32 cubemap
 - Prefiltered environment: 128x128 cubemap
 
+## TODO: Back-face Culling (doubleSided)
+
+glTF materials default to `doubleSided: false`, meaning back faces should be culled. Currently we render all faces (no culling), causing interior/back-facing polygons to show up with wrong IBL and emissive (e.g. purple bottom on DamagedHelmet instead of black).
+
+Fix: read `doubleSided` from glTF materials and set `vk::CullModeFlagBits::eBack` in the pipeline for single-sided materials. Also remove the shader normal flip (`if (dot(N,V) < 0) N = -N`) for single-sided materials.
+
 ## Future: Render Graph (Inexor-inspired)
 
 Reference implementation: `~/github/Rendering/inexor/` (local clone)
