@@ -13,7 +13,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
   vec4 viewPos;
   vec4 material;  // x=shininess, y=specStrength
   vec4 flags;     // x=useNormalMap
-  vec4 ibl_params;  // IBL parameters
+  vec4 ibl_params;  // x = useIBL, y = iblIntensity, z = tonemapMode, w = reserved
 } ubo;
 
 // Vertex attributes

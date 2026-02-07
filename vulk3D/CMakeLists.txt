@@ -15,7 +15,7 @@ target_link_libraries(${TARGET_NAME}
   PUBLIC
   engine
   PRIVATE
-  glfw
+  ${GLFW_TARGET}
   ${Vulkan_LIBRARY})
 
 
@@ -28,7 +28,7 @@ target_link_libraries(app
   engine
   Vulkan::Headers
   PRIVATE
-  glfw
+  ${GLFW_TARGET}
 )
 if (NOT SPS_VULKAN_DISPATCH_LOADER_DYNAMIC)
   target_link_libraries(app
@@ -50,7 +50,7 @@ target_link_libraries(app_imgui
   imgui_impl
   Vulkan::Headers
   PRIVATE
-  glfw
+  ${GLFW_TARGET}
 )
 if (NOT SPS_VULKAN_DISPATCH_LOADER_DYNAMIC)
   target_link_libraries(app_imgui

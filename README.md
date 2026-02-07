@@ -16,3 +16,6 @@ Indexing `renderFinished` semaphores by the acquired image index ensures each pr
 distinct semaphore, which is only reused once that same image is re-acquired.
 
 See: https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
+
+### Push constants
+For rendering positions of lights, we can use push constants.

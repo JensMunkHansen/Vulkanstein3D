@@ -26,6 +26,12 @@
 #include <sps/vulkan/fence.h>
 #include <sps/vulkan/semaphore.h>
 
+#include <sps/vulkan/stages/debug_2d_stage.h>
+#include <sps/vulkan/stages/raster_blend_stage.h>
+#include <sps/vulkan/stages/raster_opaque_stage.h>
+#include <sps/vulkan/stages/ray_tracing_stage.h>
+#include <sps/vulkan/stages/ui_stage.h>
+
 #include <spdlog/spdlog.h>
 #include <toml.hpp>
 
@@ -1131,242 +1137,22 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
     }
   }
 
-  // Use ray tracing if enabled and supported
-  if (m_use_raytracing && m_device->supports_ray_tracing() && m_rt_pipeline)
-  {
-    vk::Extent2D extent = m_swapchain->extent();
+  // Build frame context
+  FrameContext ctx{};
+  ctx.command_buffer = commandBuffer;
+  ctx.image_index = imageIndex;
+  ctx.extent = m_swapchain->extent();
+  ctx.render_pass = m_renderpass;
+  ctx.framebuffer = m_frameBuffers[imageIndex];
+  ctx.pipeline_layout = m_pipelineLayout;
+  ctx.mesh = m_mesh.get();
+  ctx.scene = m_scene ? &*m_scene : nullptr;
+  ctx.camera = &m_camera;
+  ctx.default_descriptor = m_descriptor.get();
+  ctx.material_descriptors = &m_material_descriptors;
+  ctx.swapchain = m_swapchain.get();
 
-    // Transition RT image to general layout for writing
-    vk::ImageMemoryBarrier barrier{};
-    barrier.oldLayout = vk::ImageLayout::eUndefined;
-    barrier.newLayout = vk::ImageLayout::eGeneral;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = m_rt_image;
-    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = {};
-    barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-
-    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eRayTracingShaderKHR, {}, {}, {}, barrier);
-
-    // Bind RT pipeline and descriptor set
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eRayTracingKHR, m_rt_pipeline->pipeline());
-    commandBuffer.bindDescriptorSets(
-      vk::PipelineBindPoint::eRayTracingKHR, m_rt_pipeline->layout(), 0, m_rt_descriptor_set, {});
-
-    // Trace rays
-    m_rt_pipeline->trace_rays(commandBuffer, extent.width, extent.height);
-
-    // Transition RT image to transfer src for blit
-    barrier.oldLayout = vk::ImageLayout::eGeneral;
-    barrier.newLayout = vk::ImageLayout::eTransferSrcOptimal;
-    barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
-    barrier.dstAccessMask = vk::AccessFlagBits::eTransferRead;
-
-    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eRayTracingShaderKHR,
-      vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, barrier);
-
-    // Transition swapchain image to transfer dst
-    vk::ImageMemoryBarrier swapBarrier{};
-    swapBarrier.oldLayout = vk::ImageLayout::eUndefined;
-    swapBarrier.newLayout = vk::ImageLayout::eTransferDstOptimal;
-    swapBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    swapBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    swapBarrier.image = m_swapchain->images()[imageIndex];
-    swapBarrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    swapBarrier.subresourceRange.baseMipLevel = 0;
-    swapBarrier.subresourceRange.levelCount = 1;
-    swapBarrier.subresourceRange.baseArrayLayer = 0;
-    swapBarrier.subresourceRange.layerCount = 1;
-    swapBarrier.srcAccessMask = {};
-    swapBarrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-
-    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, swapBarrier);
-
-    // Blit RT image to swapchain image
-    vk::ImageBlit blitRegion{};
-    blitRegion.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    blitRegion.srcSubresource.layerCount = 1;
-    blitRegion.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-    blitRegion.srcOffsets[1] =
-      vk::Offset3D{ static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1 };
-    blitRegion.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    blitRegion.dstSubresource.layerCount = 1;
-    blitRegion.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-    blitRegion.dstOffsets[1] =
-      vk::Offset3D{ static_cast<int32_t>(extent.width), static_cast<int32_t>(extent.height), 1 };
-
-    commandBuffer.blitImage(m_rt_image, vk::ImageLayout::eTransferSrcOptimal,
-      m_swapchain->images()[imageIndex], vk::ImageLayout::eTransferDstOptimal, blitRegion,
-      vk::Filter::eNearest);
-
-    // Transition swapchain image to present
-    swapBarrier.oldLayout = vk::ImageLayout::eTransferDstOptimal;
-    swapBarrier.newLayout = vk::ImageLayout::ePresentSrcKHR;
-    swapBarrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-    swapBarrier.dstAccessMask = {};
-
-    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-      vk::PipelineStageFlagBits::eBottomOfPipe, {}, {}, {}, swapBarrier);
-  }
-  else
-  {
-    // Rasterization path
-    vk::RenderPassBeginInfo renderPassInfo = {};
-    renderPassInfo.renderPass = m_renderpass;
-    renderPassInfo.framebuffer = m_frameBuffers[imageIndex];
-    renderPassInfo.renderArea.offset.x = 0;
-    renderPassInfo.renderArea.offset.y = 0;
-    renderPassInfo.renderArea.extent = m_swapchain->extent();
-
-    std::array<vk::ClearValue, 2> clearValues{};
-    clearValues[0].color = vk::ClearColorValue{ std::array<float, 4>{ 1.0f, 0.5f, 0.25f, 1.0f } };
-    clearValues[1].depthStencil = vk::ClearDepthStencilValue{ 1.0f, 0 };
-    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-    renderPassInfo.pClearValues = clearValues.data();
-
-    commandBuffer.beginRenderPass(&renderPassInfo, vk::SubpassContents::eInline);
-
-    // Set dynamic viewport
-    vk::Viewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(m_swapchain->extent().width);
-    viewport.height = static_cast<float>(m_swapchain->extent().height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    commandBuffer.setViewport(0, 1, &viewport);
-
-    // Set dynamic scissor
-    vk::Rect2D scissor{};
-    scissor.offset = vk::Offset2D{ 0, 0 };
-    scissor.extent = m_swapchain->extent();
-    commandBuffer.setScissor(0, 1, &scissor);
-
-    if (m_debug_2d_mode)
-    {
-      // 2D mode: fullscreen quad to display texture
-      commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipeline);
-      commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debug_2d_pipelineLayout,
-        0, m_descriptor->descriptor_set(), {});
-
-      // Draw fullscreen triangle (3 vertices, no vertex buffer)
-      commandBuffer.draw(3, 1, 0, 0);
-    }
-    else
-    {
-      // Push constant struct matching shader layout (88 bytes)
-      struct PushConstants
-      {
-        glm::mat4 model;
-        glm::vec4 baseColorFactor;
-        float alphaCutoff;
-        uint32_t alphaMode;
-      } pc{};
-
-      if (m_mesh)
-      {
-        m_mesh->bind(commandBuffer);
-
-        if (m_scene && !m_scene->primitives.empty() && !m_material_descriptors.empty())
-        {
-          // Pass 1: Opaque pipeline — draw OPAQUE + MASK primitives
-          commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-
-          // Collect blend primitives for pass 2
-          std::vector<const ScenePrimitive*> blend_prims;
-
-          for (const auto& prim : m_scene->primitives)
-          {
-            const auto& mat = m_scene->materials[prim.materialIndex];
-
-            if (mat.alphaMode == AlphaMode::Blend)
-            {
-              blend_prims.push_back(&prim);
-              continue;
-            }
-
-            pc.model = prim.modelMatrix;
-            pc.baseColorFactor = mat.baseColorFactor;
-            pc.alphaCutoff = mat.alphaCutoff;
-            pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
-
-            commandBuffer.pushConstants(m_pipelineLayout,
-              vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
-              static_cast<uint32_t>(sizeof(pc)), &pc);
-            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
-              m_material_descriptors[prim.materialIndex]->descriptor_set(), {});
-            commandBuffer.drawIndexed(prim.indexCount, 1, prim.firstIndex, prim.vertexOffset, 0);
-          }
-
-          // Pass 2: Blend pipeline — draw BLEND primitives sorted back-to-front
-          if (!blend_prims.empty())
-          {
-            // Sort by view-space depth (back-to-front = ascending Z in view space)
-            glm::mat4 viewMatrix = m_camera.view_matrix();
-            std::sort(blend_prims.begin(), blend_prims.end(),
-              [&viewMatrix](const ScenePrimitive* a, const ScenePrimitive* b)
-              {
-                glm::vec4 aView = viewMatrix * a->modelMatrix * glm::vec4(a->centroid, 1.0f);
-                glm::vec4 bView = viewMatrix * b->modelMatrix * glm::vec4(b->centroid, 1.0f);
-                return aView.z < bView.z; // more negative Z = farther = draw first
-              });
-
-            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_blend_pipeline);
-
-            for (const auto* prim : blend_prims)
-            {
-              const auto& mat = m_scene->materials[prim->materialIndex];
-
-              pc.model = prim->modelMatrix;
-              pc.baseColorFactor = mat.baseColorFactor;
-              pc.alphaCutoff = mat.alphaCutoff;
-              pc.alphaMode = static_cast<uint32_t>(mat.alphaMode);
-
-              commandBuffer.pushConstants(m_pipelineLayout,
-                vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
-                static_cast<uint32_t>(sizeof(pc)), &pc);
-              commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout,
-                0, m_material_descriptors[prim->materialIndex]->descriptor_set(), {});
-              commandBuffer.drawIndexed(
-                prim->indexCount, 1, prim->firstIndex, prim->vertexOffset, 0);
-            }
-          }
-        }
-        else
-        {
-          // Legacy single-draw path: opaque defaults
-          commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-
-          pc.model = glm::mat4(1.0f);
-          pc.baseColorFactor = glm::vec4(1.0f);
-          pc.alphaCutoff = 0.5f;
-          pc.alphaMode = 0; // OPAQUE
-
-          commandBuffer.pushConstants(m_pipelineLayout,
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
-            static_cast<uint32_t>(sizeof(pc)), &pc);
-          commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipelineLayout, 0,
-            m_descriptor->descriptor_set(), {});
-          m_mesh->draw(commandBuffer);
-        }
-      }
-    }
-
-    // Call UI render callback (for ImGui etc.)
-    if (m_ui_render_callback)
-    {
-      m_ui_render_callback(commandBuffer);
-    }
-
-    commandBuffer.endRenderPass();
-  }
+  m_render_graph.record(ctx);
 
   try
   {
@@ -1485,6 +1271,9 @@ void Application::recreate_swapchain()
     std::uint32_t w, h;
     m_window->get_pending_resize(w, h);
   }
+
+  // Notify render stages of resize
+  m_render_graph.on_swapchain_resize(*m_device, m_swapchain->extent());
 
   spdlog::trace(
     "Swapchain recreated: {}x{}", m_swapchain->extent().width, m_swapchain->extent().height);
@@ -1725,6 +1514,12 @@ void Application::reload_shaders(
   m_device->device().destroyRenderPass(m_renderpass);
 
   make_pipeline(vertex_shader, fragment_shader);
+
+  // Update stage pipeline handles
+  if (m_raster_opaque_stage)
+    m_raster_opaque_stage->set_pipeline(m_pipeline);
+  if (m_raster_blend_stage)
+    m_raster_blend_stage->set_pipeline(m_blend_pipeline);
 
   spdlog::info("Reloaded shaders: {} + {}", vertex_shader, fragment_shader);
 }
@@ -2031,6 +1826,17 @@ void Application::finalize_setup()
     spdlog::info("Ray tracing enabled");
   }
 #endif
+
+  // Register render stages (order matters: pre-pass first, then render-pass stages)
+  m_ray_tracing_stage = m_render_graph.add<RayTracingStage>(
+    &m_use_raytracing, m_device.get(), m_rt_pipeline.get(), &m_rt_image, &m_rt_descriptor_set);
+  m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
+    &m_debug_2d_mode, &m_debug_material_index, m_debug_2d_pipeline, m_debug_2d_pipelineLayout);
+  m_raster_opaque_stage = m_render_graph.add<RasterOpaqueStage>(
+    &m_use_raytracing, &m_debug_2d_mode, m_pipeline);
+  m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
+    &m_use_raytracing, &m_debug_2d_mode, m_blend_pipeline);
+  m_ui_stage = m_render_graph.add<UIStage>(&m_ui_render_callback);
 }
 
 VkInstance Application::vk_instance() const

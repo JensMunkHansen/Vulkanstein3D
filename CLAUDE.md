@@ -2,20 +2,6 @@
 
 ## Hybrid GPU Issue (Intel + NVIDIA)
 
-### Hardware
-- GPU0: Intel UHD Graphics (TGL GT1) - integrated
-- GPU1: NVIDIA GeForce RTX 3060 Laptop GPU - discrete
-- GPU2: llvmpipe (software)
-
-### Current Behavior
-- **NVIDIA-only mode**: Works. NVIDIA can present directly.
-- **Hybrid mode**: NVIDIA cannot present (display routed through Intel). Intel fallback works but is slow.
-
-### Goal
-Get hybrid mode working with best performance:
-- **Render on NVIDIA** (fast discrete GPU)
-- **Present on Intel** (connected to display, when NVIDIA can't present)
-
 ### Proposed Solution: Multi-Device Architecture
 Use `VK_KHR_external_memory` to share rendered frames between GPUs:
 
@@ -34,14 +20,6 @@ Required extensions:
 - App initialization: `sps/vulkan/app.cpp`
 - PRIME workaround (uncommitted): `device.cpp:100-117` - checks `getSurfaceFormatsKHR` to detect when NVIDIA claims presentation support but can't actually present
 
-### Testing in Hybrid Mode
-After reboot into hybrid mode, check:
-```bash
-echo $XDG_SESSION_TYPE
-glxinfo | grep "OpenGL renderer"
-SPDLOG_LEVEL=trace ./app 2>&1 | head -100
-```
-
 ## IBL (Image-Based Lighting)
 
 ### Implementation
@@ -49,24 +27,6 @@ SPDLOG_LEVEL=trace ./app 2>&1 | head -100
 - BRDF LUT: 128x128, 256 samples
 - Irradiance map: 32x32 cubemap
 - Prefiltered environment: 128x128 cubemap
-
-### HDR Environments
-Source: Khronos `glTF-Sample-Environments` repo, `low_resolution_hdrs` branch
-```
-https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Environments/low_resolution_hdrs/{name}.hdr
-```
-Available: `neutral.hdr`, `footprint_court.hdr`, `field.hdr`, `helipad.hdr`, etc.
-
-### Key Files
-- `sps/vulkan/ibl.h/cpp` - IBL class
-- `sps/vulkan/shaders/fragment.frag` - PBR shader with IBL (bindings 6,7,8)
-- `data/*.hdr` - HDR environment maps
-
-### Vulkan Cubemap
-- `vk::ImageCreateFlagBits::eCubeCompatible`
-- 6 array layers (+X, -X, +Y, -Y, +Z, -Z)
-- `vk::ImageViewType::eCube`
-- Shader: `samplerCube` type
 
 ## Future: Render Graph (Inexor-inspired)
 

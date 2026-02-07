@@ -14,7 +14,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
   vec4 viewPos;
   vec4 material;
   vec4 flags;           // not used in normal vis
-  vec4 ibl_params;      // not used in normal vis
+  vec4 ibl_params;      // x = useIBL, y = iblIntensity, z = tonemapMode, w = reserved
 } ubo;
 
 layout(location = 0) in vec3 fragColor;

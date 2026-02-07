@@ -14,7 +14,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
   vec4 viewPos;         // xy = pan offset, z = zoom level, w = unused
   vec4 material;        // z = textureIndex (0=baseColor, 1=normal, 2=metalRough, 3=emissive, 4=ao)
   vec4 flags;           // x = channel mode (0=RGB, 1=R, 2=G, 3=B, 4=A)
-  vec4 ibl_params;      // unused in debug shader
+  vec4 ibl_params;      // x = useIBL, y = iblIntensity, z = tonemapMode, w = reserved
 } ubo;
 
 // All textures bound

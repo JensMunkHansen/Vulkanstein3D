@@ -15,6 +15,7 @@
 #include <sps/vulkan/light.h>
 #include <sps/vulkan/mesh.h>
 #include <sps/vulkan/raytracing_pipeline.h>
+#include <sps/vulkan/render_graph.h>
 #include <sps/vulkan/renderer.h>
 #include <sps/vulkan/texture.h>
 #include <sps/vulkan/uniform_buffer.h>
@@ -27,6 +28,11 @@ namespace sps::vulkan
 class Fence;
 class Semaphore;
 class CommandRegistry;
+class Debug2DStage;
+class RasterOpaqueStage;
+class RasterBlendStage;
+class RayTracingStage;
+class UIStage;
 
 /// Uniform buffer object layout (must match shader std140 layout)
 /// Used for both rasterization and ray tracing
@@ -43,7 +49,7 @@ struct UniformBufferObject
   glm::vec4
     material; // offset 320, size 16 (x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength)
   glm::vec4 flags;      // offset 336, size 16 (x=useNormalMap, y=useEmissive, z=useAO, w=exposure)
-  glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=reserved, w=reserved)
+  glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=tonemapMode, w=reserved)
 };
 
 class Application : public VulkanRenderer
@@ -133,6 +139,8 @@ public:
     return m_debug_texture_index;
   } // 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao
   int& debug_channel_mode() { return m_debug_channel_mode; } // 0=RGB, 1=R, 2=G, 3=B, 4=A
+  int& debug_material_index() { return m_debug_material_index; }
+  int material_count() const { return static_cast<int>(m_material_descriptors.size()); }
   float& debug_2d_zoom() { return m_debug_2d_zoom; }
   glm::vec2& debug_2d_pan() { return m_debug_2d_pan; }
   void reset_debug_2d_view()
@@ -289,6 +297,7 @@ private:
   bool m_debug_2d_mode = false;
   int m_debug_texture_index = 0;              // Which texture to display
   int m_debug_channel_mode = 0;               // Which channel(s) to display
+  int m_debug_material_index = 0;             // Which material to inspect
   float m_debug_2d_zoom = 1.0f;               // Zoom level (1.0 = 100%)
   glm::vec2 m_debug_2d_pan = glm::vec2(0.0f); // Pan offset
 
@@ -303,5 +312,13 @@ private:
   // Current shader paths
   std::string m_vertex_shader_path;
   std::string m_fragment_shader_path;
+
+  // Render graph (stage-based command recording)
+  RenderGraph m_render_graph;
+  Debug2DStage* m_debug_2d_stage{ nullptr };
+  RasterOpaqueStage* m_raster_opaque_stage{ nullptr };
+  RasterBlendStage* m_raster_blend_stage{ nullptr };
+  RayTracingStage* m_ray_tracing_stage{ nullptr };
+  UIStage* m_ui_stage{ nullptr };
 };
 }

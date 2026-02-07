@@ -12,6 +12,8 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <string>
+
 using namespace sps::vulkan;
 using namespace sps::vulkan::debug;
 
@@ -246,6 +248,24 @@ int main(int argc, char* argv[])
 
       if (app.debug_2d_mode())
       {
+        if (app.material_count() > 1)
+        {
+          int count = app.material_count();
+          std::string preview = "Material " + std::to_string(app.debug_material_index());
+          if (ImGui::BeginCombo("Material##debug2d", preview.c_str()))
+          {
+            for (int i = 0; i < count; i++)
+            {
+              std::string label = "Material " + std::to_string(i);
+              bool selected = (app.debug_material_index() == i);
+              if (ImGui::Selectable(label.c_str(), selected))
+                app.debug_material_index() = i;
+              if (selected)
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+          }
+        }
         ImGui::Combo("Texture", &app.debug_texture_index(), texture_names, TEX_COUNT);
         ImGui::Combo("Channel", &app.debug_channel_mode(), channel_names, CHANNEL_COUNT);
 

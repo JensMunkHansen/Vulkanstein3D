@@ -3,12 +3,21 @@ if(NOT GLSL_VALIDATOR)
     message(FATAL_ERROR "glslangValidator not found!")
 endif()
 
-set(SHADERS
+# Shared include files (used via #include "tonemap.glsl" etc.)
+set(SHADER_INCLUDES
+  ${CMAKE_CURRENT_SOURCE_DIR}/tonemap.glsl
+)
+
+# Shaders that use #include and need the include dir + dependency tracking
+set(SHADERS_WITH_INCLUDES
   fragment.frag
+  blinn_phong.frag
+)
+
+set(SHADERS
   vertex.vert
   fragment_normals.frag
   vertex_normals.vert
-  blinn_phong.frag
   debug_uv.frag
   debug_normals.frag
   debug_basecolor.frag
@@ -25,6 +34,21 @@ set(RT_SHADERS
   closesthit.rchit
 )
 
+# Compile shaders that use #include (need --include-dir)
+foreach(SHADER ${SHADERS_WITH_INCLUDES})
+  get_filename_component(FILE_NAME ${SHADER} NAME_WLE)
+  set(SPIRV ${CMAKE_CURRENT_BINARY_DIR}/${FILE_NAME}.spv)
+  add_custom_command(
+    OUTPUT ${SPIRV}
+    COMMAND ${GLSL_VALIDATOR} -V -I${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} -o ${SPIRV}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} ${SHADER_INCLUDES}
+  )
+
+  list(APPEND SPIRV_FILES ${SPIRV})
+endforeach()
+
+# Compile plain shaders (no includes)
 foreach(SHADER ${SHADERS})
   get_filename_component(FILE_NAME ${SHADER} NAME_WLE)
   set(SPIRV ${CMAKE_CURRENT_BINARY_DIR}/${FILE_NAME}.spv)
@@ -51,6 +75,8 @@ foreach(SHADER ${RT_SHADERS})
   list(APPEND SPIRV_FILES ${SPIRV})
 endforeach()
 
-source_group("Shader Files" FILES ${SHADERS} ${RT_SHADERS})
+source_group("Shader Files" FILES ${SHADERS_WITH_INCLUDES} ${SHADERS} ${RT_SHADERS})
+source_group("Shader Includes" FILES ${SHADER_INCLUDES})
 
-add_custom_target(vulkan-shaders DEPENDS ${SPIRV_FILES} SOURCES ${SHADERS} ${RT_SHADERS})
+add_custom_target(vulkan-shaders DEPENDS ${SPIRV_FILES}
+  SOURCES ${SHADERS_WITH_INCLUDES} ${SHADERS} ${RT_SHADERS} ${SHADER_INCLUDES})

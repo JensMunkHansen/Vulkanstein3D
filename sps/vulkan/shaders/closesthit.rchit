@@ -15,7 +15,7 @@ layout(set = 0, binding = 2) uniform CameraUBO {
   vec4 viewPos;
   vec4 material;
   vec4 flags;
-  vec4 ibl_params;
+  vec4 ibl_params;    // x = useIBL, y = iblIntensity, z = tonemapMode, w = reserved
 } ubo;
 
 // Vertex structure: position(3), normal(3), color(3) = 9 floats

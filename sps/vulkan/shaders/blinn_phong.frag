@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 // Blinn-Phong lighting shader
 // Reference: https://learnopengl.com/Advanced-Lighting/Advanced-Lighting
@@ -14,7 +15,7 @@ layout(set = 0, binding = 0) uniform UniformBufferObject {
   vec4 viewPos;         // xyz = camera position
   vec4 material;        // x = shininess, y = specStrength
   vec4 flags;           // x = useNormalMap, w = exposure
-  vec4 ibl_params;      // x = useIBL, y = iblIntensity (not used in Blinn-Phong)
+  vec4 ibl_params;      // x = useIBL, y = iblIntensity, z = tonemapMode, w = reserved
 } ubo;
 
 const float GAMMA = 2.2;
@@ -30,6 +31,8 @@ vec3 linearToSRGB(vec3 color)
 {
   return pow(color, vec3(1.0 / GAMMA));
 }
+
+#include "tonemap.glsl"
 
 // Textures
 layout(set = 0, binding = 1) uniform sampler2D baseColorTexture;
@@ -122,8 +125,8 @@ void main()
   float exposure = ubo.flags.w;
   result *= exposure;
 
-  // Tone mapping (simple Reinhard for Blinn-Phong)
-  result = result / (result + vec3(1.0));
+  // Tone mapping (selectable via ibl_params.z)
+  result = applyToneMap(result, int(ubo.ibl_params.z));
 
   // Gamma correction (linear to sRGB)
   result = linearToSRGB(result);
