@@ -662,8 +662,8 @@ void IBL::create_cubemap_from_equirectangular()
   cmd.copyBufferToImage(staging.buffer(), m_prefiltered_image,
     vk::ImageLayout::eTransferDstOptimal, regions);
 
-  transition_image_layout(cmd, m_prefiltered_image, vk::ImageLayout::eTransferDstOptimal,
-    vk::ImageLayout::eShaderReadOnlyOptimal, m_mip_levels, 6);
+  // Leave in TransferDstOptimal — generate_prefiltered_map() will upload remaining
+  // mip levels and do the final transition to ShaderReadOnlyOptimal
 
   end_single_time_commands(m_device, cmd_pool, cmd);
   dev.destroyCommandPool(cmd_pool);
@@ -874,10 +874,173 @@ void IBL::generate_irradiance_map()
 
 void IBL::generate_prefiltered_map()
 {
-  // Prefiltered map was already created in create_cubemap_from_equirectangular
-  // TODO: Generate proper mip levels with increasing roughness using GGX importance sampling
-  // For now, mip 0 has the full environment which works for low roughness
-  spdlog::trace("Prefiltered map using base cubemap (roughness mips not yet implemented)");
+  if (m_hdr_data.empty())
+    return; // Default environment already fully initialized
+
+  auto dev = m_device.device();
+  constexpr float PI = 3.14159265359f;
+  constexpr uint32_t SAMPLE_COUNT = 256;
+  constexpr float MAX_REFLECTION_LOD = 4.0f; // Must match shader
+
+  // Hammersley sequence for quasi-random sampling
+  auto radical_inverse_vdc = [](uint32_t bits) -> float {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return static_cast<float>(bits) * 2.3283064365386963e-10f;
+  };
+
+  auto hammersley = [&](uint32_t i, uint32_t n) -> std::pair<float, float> {
+    return { static_cast<float>(i) / static_cast<float>(n), radical_inverse_vdc(i) };
+  };
+
+  spdlog::info("Generating prefiltered environment mip levels...");
+
+  vk::CommandPoolCreateInfo pool_info{};
+  pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
+  pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
+  vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
+
+  // Generate and upload each mip level (mip 0 already has the raw environment)
+  for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
+  {
+    // Roughness for this mip level (matches shader: LOD = roughness * MAX_REFLECTION_LOD)
+    float roughness = std::min(1.0f, static_cast<float>(mip) / MAX_REFLECTION_LOD);
+    uint32_t mip_size = std::max(1u, m_resolution >> mip);
+    float alpha = roughness * roughness; // GGX alpha = perceptualRoughness^2
+
+    spdlog::trace("  Mip {}: {}x{}, roughness={:.3f}", mip, mip_size, mip_size, roughness);
+
+    std::vector<float> mip_data(mip_size * mip_size * 4 * 6);
+
+    for (uint32_t face = 0; face < 6; ++face)
+    {
+      for (uint32_t y = 0; y < mip_size; ++y)
+      {
+        for (uint32_t x = 0; x < mip_size; ++x)
+        {
+          float u = (x + 0.5f) / mip_size;
+          float v = (y + 0.5f) / mip_size;
+
+          // Normal = View = Reflection direction for prefiltering
+          float nx, ny, nz;
+          get_cube_direction(face, u, v, nx, ny, nz);
+          float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
+          nx /= nlen; ny /= nlen; nz /= nlen;
+
+          // Build tangent frame from N
+          float upx, upy, upz;
+          if (std::abs(ny) < 0.999f) { upx = 0; upy = 1; upz = 0; }
+          else { upx = 1; upy = 0; upz = 0; }
+
+          // T = normalize(cross(up, N))
+          float tx = upy * nz - upz * ny;
+          float ty = upz * nx - upx * nz;
+          float tz = upx * ny - upy * nx;
+          float tlen = std::sqrt(tx * tx + ty * ty + tz * tz);
+          tx /= tlen; ty /= tlen; tz /= tlen;
+
+          // B = cross(N, T)
+          float bx = ny * tz - nz * ty;
+          float by = nz * tx - nx * tz;
+          float bz = nx * ty - ny * tx;
+
+          float total_r = 0, total_g = 0, total_b = 0;
+          float total_weight = 0;
+
+          for (uint32_t s = 0; s < SAMPLE_COUNT; ++s)
+          {
+            auto xi = hammersley(s, SAMPLE_COUNT);
+
+            // GGX importance sample half-vector in tangent space
+            float phi = 2.0f * PI * xi.first;
+            float cos_theta = std::sqrt(
+              (1.0f - xi.second) / (1.0f + (alpha * alpha - 1.0f) * xi.second));
+            float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+
+            float hx_t = std::cos(phi) * sin_theta;
+            float hy_t = std::sin(phi) * sin_theta;
+            float hz_t = cos_theta;
+
+            // Transform half-vector to world space: H = hx*T + hy*B + hz*N
+            float hwx = hx_t * tx + hy_t * bx + hz_t * nx;
+            float hwy = hx_t * ty + hy_t * by + hz_t * ny;
+            float hwz = hx_t * tz + hy_t * bz + hz_t * nz;
+
+            // L = reflect(-N, H) = 2*(N·H)*H - N
+            float NdotH = nx * hwx + ny * hwy + nz * hwz;
+            float lx = 2.0f * NdotH * hwx - nx;
+            float ly = 2.0f * NdotH * hwy - ny;
+            float lz = 2.0f * NdotH * hwz - nz;
+
+            float NdotL = nx * lx + ny * ly + nz * lz;
+
+            if (NdotL > 0.0f)
+            {
+              float sr, sg, sb;
+              sample_equirect(m_hdr_data, m_hdr_width, m_hdr_height, lx, ly, lz, sr, sg, sb);
+              total_r += sr * NdotL;
+              total_g += sg * NdotL;
+              total_b += sb * NdotL;
+              total_weight += NdotL;
+            }
+          }
+
+          if (total_weight > 0.0f)
+          {
+            total_r /= total_weight;
+            total_g /= total_weight;
+            total_b /= total_weight;
+          }
+
+          size_t idx = (face * mip_size * mip_size + y * mip_size + x) * 4;
+          mip_data[idx + 0] = total_r;
+          mip_data[idx + 1] = total_g;
+          mip_data[idx + 2] = total_b;
+          mip_data[idx + 3] = 1.0f;
+        }
+      }
+    }
+
+    // Upload this mip level via staging buffer
+    vk::DeviceSize data_size = mip_data.size() * sizeof(float);
+    Buffer staging(m_device, "prefiltered mip " + std::to_string(mip), data_size,
+      vk::BufferUsageFlagBits::eTransferSrc,
+      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    staging.update(mip_data.data(), data_size);
+
+    auto cmd = begin_single_time_commands(m_device, cmd_pool);
+
+    std::vector<vk::BufferImageCopy> regions(6);
+    for (uint32_t f = 0; f < 6; ++f)
+    {
+      regions[f].bufferOffset = f * mip_size * mip_size * 4 * sizeof(float);
+      regions[f].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+      regions[f].imageSubresource.mipLevel = mip;
+      regions[f].imageSubresource.baseArrayLayer = f;
+      regions[f].imageSubresource.layerCount = 1;
+      regions[f].imageExtent = vk::Extent3D{ mip_size, mip_size, 1 };
+    }
+
+    cmd.copyBufferToImage(staging.buffer(), m_prefiltered_image,
+      vk::ImageLayout::eTransferDstOptimal, regions);
+
+    end_single_time_commands(m_device, cmd_pool, cmd);
+  }
+
+  // Final transition: all mip levels to ShaderReadOnlyOptimal
+  {
+    auto cmd = begin_single_time_commands(m_device, cmd_pool);
+    transition_image_layout(cmd, m_prefiltered_image, vk::ImageLayout::eTransferDstOptimal,
+      vk::ImageLayout::eShaderReadOnlyOptimal, m_mip_levels, 6);
+    end_single_time_commands(m_device, cmd_pool, cmd);
+  }
+
+  dev.destroyCommandPool(cmd_pool);
+
+  spdlog::info("Generated prefiltered environment ({} mip levels)", m_mip_levels);
 }
 
 } // namespace sps::vulkan
