@@ -25,12 +25,16 @@ layout(location = 4) in vec4 inTangent;  // xyz=tangent, w=handedness
 
 // Push constant for per-draw material properties
 layout(push_constant) uniform PushConstants {
-  mat4 model;            // 64 bytes (vertex stage)
-  vec4 baseColorFactor;  // 16 bytes (fragment stage)
-  float metallicFactor;  //  4 bytes (fragment stage)
-  float roughnessFactor; //  4 bytes (fragment stage)
-  float alphaCutoff;     //  4 bytes (fragment stage)
-  uint alphaMode;        //  4 bytes (fragment stage) 0=OPAQUE, 1=MASK, 2=BLEND
+  mat4 model;                  // 64 bytes (vertex stage)
+  vec4 baseColorFactor;        // 16 bytes (fragment stage)
+  float metallicFactor;        //  4 bytes (fragment stage)
+  float roughnessFactor;       //  4 bytes (fragment stage)
+  float alphaCutoff;           //  4 bytes (fragment stage)
+  uint alphaMode;              //  4 bytes (fragment stage) 0=OPAQUE, 1=MASK, 2=BLEND
+  float iridescenceFactor;     //  4 bytes (fragment stage)
+  float iridescenceIor;        //  4 bytes (fragment stage)
+  float iridescenceThicknessMin; // 4 bytes (fragment stage)
+  float iridescenceThicknessMax; // 4 bytes (fragment stage)
 } pc;
 
 // Outputs to fragment shader

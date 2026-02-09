@@ -80,6 +80,8 @@ private:
   std::unique_ptr<Texture> m_defaultMetallicRoughness;
   std::unique_ptr<Texture> m_defaultEmissive;
   std::unique_ptr<Texture> m_defaultAO;
+  std::unique_ptr<Texture> m_defaultIridescence;
+  std::unique_ptr<Texture> m_defaultIridescenceThickness;
 
   // Single-material textures (non-scene path, from GltfModel)
   std::unique_ptr<Texture> m_baseColorTexture;

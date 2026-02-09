@@ -1051,6 +1051,20 @@ void traverse_nodes(
           scene_mat.alphaCutoff = primitive.material->alpha_cutoff;
           scene_mat.doubleSided = primitive.material->double_sided;
 
+          // KHR_materials_iridescence
+          if (primitive.material->has_iridescence)
+          {
+            const auto& irid = primitive.material->iridescence;
+            scene_mat.iridescenceTexture = extract_texture(
+              irid.iridescence_texture, device, base_path, "iridescence", true);
+            scene_mat.iridescenceThicknessTexture = extract_texture(
+              irid.iridescence_thickness_texture, device, base_path, "iridescenceThickness", true);
+            scene_mat.iridescenceFactor = irid.iridescence_factor;
+            scene_mat.iridescenceIor = irid.iridescence_ior;
+            scene_mat.iridescenceThicknessMin = irid.iridescence_thickness_min;
+            scene_mat.iridescenceThicknessMax = irid.iridescence_thickness_max;
+          }
+
           // HACK: Approximate KHR_materials_transmission as alpha blend.
           // Proper transmission requires a separate render pass that samples
           // the opaque scene behind the transmissive surface (future: glass stage).

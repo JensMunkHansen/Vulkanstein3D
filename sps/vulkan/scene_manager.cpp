@@ -46,6 +46,16 @@ void SceneManager::create_defaults(const std::string& hdr_file)
   const uint8_t default_ao[] = { 255, 255, 255, 255 };
   m_defaultAO = std::make_unique<Texture>(m_device, "default ao", default_ao, 1, 1, true);
 
+  // Create default 1x1 iridescence texture (white = factor passthrough)
+  const uint8_t default_iridescence[] = { 255, 255, 255, 255 };
+  m_defaultIridescence =
+    std::make_unique<Texture>(m_device, "default iridescence", default_iridescence, 1, 1, true);
+
+  // Create default 1x1 iridescence thickness texture (white = max thickness passthrough)
+  const uint8_t default_iridescence_thickness[] = { 255, 255, 255, 255 };
+  m_defaultIridescenceThickness = std::make_unique<Texture>(
+    m_device, "default iridescence thickness", default_iridescence_thickness, 1, 1, true);
+
   // Create IBL from HDR environment map
   try
   {
@@ -161,6 +171,12 @@ void SceneManager::create_descriptors(vk::Buffer uniform_buffer)
       vk::ShaderStageFlagBits::eFragment);
   }
 
+  // Iridescence textures (bindings 9, 10)
+  builder.add_combined_image_sampler(m_defaultIridescence->image_view(),
+    m_defaultIridescence->sampler(), 9, vk::ShaderStageFlagBits::eFragment);
+  builder.add_combined_image_sampler(m_defaultIridescenceThickness->image_view(),
+    m_defaultIridescenceThickness->sampler(), 10, vk::ShaderStageFlagBits::eFragment);
+
   m_descriptor = std::make_unique<ResourceDescriptor>(builder.build("camera descriptor"));
   spdlog::trace("Created descriptor with PBR texture bindings + IBL");
 
@@ -206,6 +222,17 @@ void SceneManager::create_descriptors(vk::Buffer uniform_buffer)
         mat_builder.add_combined_image_sampler(m_ibl->prefiltered_view(),
           m_ibl->prefiltered_sampler(), 8, vk::ShaderStageFlagBits::eFragment);
       }
+
+      // Iridescence textures (bindings 9, 10)
+      Texture* matIridescence =
+        mat.iridescenceTexture ? mat.iridescenceTexture.get() : m_defaultIridescence.get();
+      Texture* matIridescenceThickness = mat.iridescenceThicknessTexture
+        ? mat.iridescenceThicknessTexture.get()
+        : m_defaultIridescenceThickness.get();
+      mat_builder.add_combined_image_sampler(matIridescence->image_view(),
+        matIridescence->sampler(), 9, vk::ShaderStageFlagBits::eFragment);
+      mat_builder.add_combined_image_sampler(matIridescenceThickness->image_view(),
+        matIridescenceThickness->sampler(), 10, vk::ShaderStageFlagBits::eFragment);
 
       m_material_descriptors.push_back(
         std::make_unique<ResourceDescriptor>(mat_builder.build("material_" + std::to_string(i))));

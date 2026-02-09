@@ -35,14 +35,22 @@ layout(set = 0, binding = 6) uniform sampler2D brdfLUT;           // BRDF integr
 layout(set = 0, binding = 7) uniform samplerCube irradianceMap;   // Diffuse IBL
 layout(set = 0, binding = 8) uniform samplerCube prefilterMap;    // Specular IBL (mips = roughness)
 
+// Iridescence textures
+layout(set = 0, binding = 9) uniform sampler2D iridescenceTexture;           // R=factor mask
+layout(set = 0, binding = 10) uniform sampler2D iridescenceThicknessTexture; // G=thickness
+
 // Push constant for per-draw material properties
 layout(push_constant) uniform PushConstants {
-  mat4 model;            // 64 bytes (vertex stage)
-  vec4 baseColorFactor;  // 16 bytes
-  float metallicFactor;  //  4 bytes
-  float roughnessFactor; //  4 bytes
-  float alphaCutoff;     //  4 bytes
-  uint alphaMode;        //  4 bytes  bits[1:0]=0 OPAQUE,1 MASK,2 BLEND; bit[2]=doubleSided
+  mat4 model;                  // 64 bytes (vertex stage)
+  vec4 baseColorFactor;        // 16 bytes
+  float metallicFactor;        //  4 bytes
+  float roughnessFactor;       //  4 bytes
+  float alphaCutoff;           //  4 bytes
+  uint alphaMode;              //  4 bytes  bits[1:0]=0 OPAQUE,1 MASK,2 BLEND; bit[2]=doubleSided
+  float iridescenceFactor;     //  4 bytes
+  float iridescenceIor;        //  4 bytes
+  float iridescenceThicknessMin; // 4 bytes
+  float iridescenceThicknessMax; // 4 bytes  (total: 112)
 } pc;
 
 layout(location = 0) in vec3 fragColor;
@@ -71,6 +79,7 @@ vec3 linearToSRGB(vec3 color)
 }
 
 #include "tonemap.glsl"
+#include "iridescence.glsl"
 
 // ============================================================================
 // BRDF Functions (matching glTF-Sample-Viewer)
@@ -260,6 +269,21 @@ void main()
   float NdotH = clamp(dot(N, H), 0.0, 1.0);
   float VdotH = clamp(dot(V, H), 0.0, 1.0);
 
+  // Iridescence: evaluate thin-film Fresnel if factor > 0
+  float iridescenceFac = pc.iridescenceFactor * texture(iridescenceTexture, fragTexCoord).r;
+  float iridescenceThickness = mix(pc.iridescenceThicknessMin, pc.iridescenceThicknessMax,
+    texture(iridescenceThicknessTexture, fragTexCoord).g);
+  if (iridescenceThickness == 0.0) iridescenceFac = 0.0;
+
+  vec3 iridescenceFresnel_dielectric = vec3(0.0);
+  vec3 iridescenceFresnel_metallic = vec3(0.0);
+  if (iridescenceFac > 0.0) {
+    iridescenceFresnel_dielectric = evalIridescence(1.0, pc.iridescenceIor, NdotV,
+      iridescenceThickness, f0_dielectric);
+    iridescenceFresnel_metallic = evalIridescence(1.0, pc.iridescenceIor, NdotV,
+      iridescenceThickness, albedo);
+  }
+
   // Fresnel term
   vec3 F = F_Schlick(F0, F90, VdotH);
 
@@ -274,6 +298,13 @@ void main()
   // Dielectrics: diffuse + specular with 0.04 fresnel
   vec3 dielectric_brdf = mix(diffuseBRDF, vec3(specularBRDF), F);
   vec3 metal_brdf = F * specularBRDF;
+
+  // Apply iridescence to direct lighting BRDF
+  if (iridescenceFac > 0.0) {
+    metal_brdf = mix(metal_brdf, vec3(specularBRDF) * iridescenceFresnel_metallic, iridescenceFac);
+    dielectric_brdf = mix(dielectric_brdf,
+      rgb_mix(diffuseBRDF, vec3(specularBRDF), iridescenceFresnel_dielectric), iridescenceFac);
+  }
 
   vec3 brdf = mix(dielectric_brdf, metal_brdf, metallic);
 
@@ -304,6 +335,13 @@ void main()
     // Dielectric path: energy-conserving mix of diffuse and specular
     vec3 f_dielectric_fresnel = getIBLGGXFresnel(N, V, perceptualRoughness, f0_dielectric, 1.0);
     vec3 f_dielectric_brdf = mix(f_diffuse_ibl, f_specular_ibl, f_dielectric_fresnel);
+
+    // Apply iridescence to IBL
+    if (iridescenceFac > 0.0) {
+      f_metal_brdf = mix(f_metal_brdf, f_specular_ibl * iridescenceFresnel_metallic, iridescenceFac);
+      f_dielectric_brdf = mix(f_dielectric_brdf,
+        rgb_mix(f_diffuse_ibl, f_specular_ibl, iridescenceFresnel_dielectric), iridescenceFac);
+    }
 
     // Final: blend between dielectric and metal by metallic factor
     ambient = mix(f_dielectric_brdf, f_metal_brdf, metallic) * iblIntensity;

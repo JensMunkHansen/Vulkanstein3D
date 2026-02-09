@@ -98,12 +98,18 @@ struct SceneMaterial
   std::unique_ptr<Texture> metallicRoughnessTexture;
   std::unique_ptr<Texture> emissiveTexture;
   std::unique_ptr<Texture> aoTexture;
+  std::unique_ptr<Texture> iridescenceTexture;          // factor mask (R channel)
+  std::unique_ptr<Texture> iridescenceThicknessTexture;  // thickness map (G channel)
   glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
   float metallicFactor{1.0f};
   float roughnessFactor{1.0f};
   AlphaMode alphaMode{AlphaMode::Opaque};
   float alphaCutoff{0.5f};
   bool doubleSided{false};
+  float iridescenceFactor{0.0f};
+  float iridescenceIor{1.3f};
+  float iridescenceThicknessMin{100.0f};
+  float iridescenceThicknessMax{400.0f};
 };
 
 /// @brief Complete scene with merged geometry and per-primitive materials.

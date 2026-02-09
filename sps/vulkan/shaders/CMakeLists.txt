@@ -6,6 +6,7 @@ endif()
 # Shared include files (used via #include "tonemap.glsl" etc.)
 set(SHADER_INCLUDES
   ${CMAKE_CURRENT_SOURCE_DIR}/tonemap.glsl
+  ${CMAKE_CURRENT_SOURCE_DIR}/iridescence.glsl
 )
 
 # Shaders that use #include and need the include dir + dependency tracking

@@ -109,6 +109,8 @@ files = [
       "@DATA_DIR@/DamagedHelmet/DamagedHelmet.glb",
       "@DATA_DIR@/CompareMetallic/glTF/CompareMetallic.gltf",
       "@DATA_DIR@/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
+      "@DATA_DIR@/IridescenceMetallicSpheres/glTF/IridescenceMetallicSpheres.gltf",
+      
 ]
 
 [HDRenvironments]

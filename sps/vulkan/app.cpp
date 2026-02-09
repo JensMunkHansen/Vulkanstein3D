@@ -1347,9 +1347,10 @@ void Application::make_pipeline(
   // MSAA
   specification.msaaSamples = m_msaaSamples;
 
-  // Push constant: model(64) + baseColorFactor(16) + metallicFactor(4) + roughnessFactor(4) + alphaCutoff(4) + alphaMode(4) = 96 bytes
+  // Push constant: model(64) + baseColorFactor(16) + metallicFactor(4) + roughnessFactor(4) + alphaCutoff(4) + alphaMode(4)
+  //   + iridescenceFactor(4) + iridescenceIor(4) + iridescenceThicknessMin(4) + iridescenceThicknessMax(4) = 112 bytes
   vk::PushConstantRange pcRange{
-    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 96
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 112
   };
   specification.pushConstantRanges = { pcRange };
 

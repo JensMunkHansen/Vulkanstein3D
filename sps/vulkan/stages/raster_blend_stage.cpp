@@ -39,7 +39,7 @@ void RasterBlendStage::record(const FrameContext& ctx)
       return aView.z < bView.z; // more negative Z = farther = draw first
     });
 
-  // Push constant struct matching shader layout (96 bytes)
+  // Push constant struct matching shader layout (112 bytes)
   struct PushConstants
   {
     glm::mat4 model;
@@ -48,6 +48,10 @@ void RasterBlendStage::record(const FrameContext& ctx)
     float roughnessFactor;
     float alphaCutoff;
     uint32_t alphaMode;
+    float iridescenceFactor;
+    float iridescenceIor;
+    float iridescenceThicknessMin;
+    float iridescenceThicknessMax;
   } pc{};
 
   // Mesh is already bound by RasterOpaqueStage
@@ -67,6 +71,10 @@ void RasterBlendStage::record(const FrameContext& ctx)
     pc.roughnessFactor = mat.roughnessFactor;
     pc.alphaCutoff = mat.alphaCutoff;
     pc.alphaMode = static_cast<uint32_t>(mat.alphaMode) | (mat.doubleSided ? 4u : 0u);
+    pc.iridescenceFactor = mat.iridescenceFactor;
+    pc.iridescenceIor = mat.iridescenceIor;
+    pc.iridescenceThicknessMin = mat.iridescenceThicknessMin;
+    pc.iridescenceThicknessMax = mat.iridescenceThicknessMax;
 
     ctx.command_buffer.pushConstants(ctx.pipeline_layout,
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
