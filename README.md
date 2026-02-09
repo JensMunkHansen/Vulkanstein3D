@@ -19,3 +19,5 @@ See: https://docs.vulkan.org/guide/latest/swapchain_semaphore_reuse.html
 
 ### Push constants
 For rendering positions of lights, we can use push constants.
+
+Fixed validation errors on frame semaphores >> black is working
