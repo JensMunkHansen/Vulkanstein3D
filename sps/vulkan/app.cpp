@@ -991,6 +991,23 @@ void Application::key_callback(GLFWwindow* window, int key, int scancode, int ac
     spdlog::info("Rendering mode: {}", app->m_use_raytracing ? "Ray Tracing" : "Rasterization");
   }
 
+  // F11 to toggle fullscreen
+  if (key == GLFW_KEY_F11 && action == GLFW_PRESS)
+  {
+    GLFWmonitor* monitor = glfwGetWindowMonitor(window);
+    if (monitor)
+    {
+      glfwSetWindowMonitor(window, nullptr, 100, 100,
+        static_cast<int>(app->m_window_width), static_cast<int>(app->m_window_height), 0);
+    }
+    else
+    {
+      GLFWmonitor* primary = glfwGetPrimaryMonitor();
+      const GLFWvidmode* mode = glfwGetVideoMode(primary);
+      glfwSetWindowMonitor(window, primary, 0, 0, mode->width, mode->height, mode->refreshRate);
+    }
+  }
+
   // F12 to save screenshot
   if (key == GLFW_KEY_F12 && action == GLFW_PRESS)
   {
@@ -1674,6 +1691,29 @@ void Application::poll_commands()
       [this](const std::vector<std::string>&)
       {
         begin_screenshot_all();
+      });
+
+    // Register "fullscreen" command
+    m_command_registry->add("fullscreen", "Toggle fullscreen mode", "",
+      [this](const std::vector<std::string>&)
+      {
+        GLFWwindow* win = glfw_window();
+        GLFWmonitor* monitor = glfwGetWindowMonitor(win);
+        if (monitor)
+        {
+          // Currently fullscreen -> go windowed
+          glfwSetWindowMonitor(win, nullptr, 100, 100,
+            static_cast<int>(m_window_width), static_cast<int>(m_window_height), 0);
+          spdlog::info("Switched to windowed mode");
+        }
+        else
+        {
+          // Currently windowed -> go fullscreen
+          GLFWmonitor* primary = glfwGetPrimaryMonitor();
+          const GLFWvidmode* mode = glfwGetVideoMode(primary);
+          glfwSetWindowMonitor(win, primary, 0, 0, mode->width, mode->height, mode->refreshRate);
+          spdlog::info("Switched to fullscreen {}x{}", mode->width, mode->height);
+        }
       });
 
     // Register "mode" command for 2D/3D toggle
