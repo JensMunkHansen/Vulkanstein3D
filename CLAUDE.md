@@ -49,6 +49,29 @@ Stages registered in `finalize_setup()`, no-ops via `is_enabled()` + early retur
 - Declarative resource creation (logical → physical during `compile()`)
 - Compute stages for IBL regeneration, post-processing
 
+## Future: Subsurface Scattering (KHR_materials_subsurface)
+
+`KHR_materials_subsurface` is a draft glTF extension (not yet ratified, [PR #1928](https://github.com/KhronosGroup/glTF/pull/1928)). Split out from `KHR_materials_volume` for independent scattering vs absorption control. Requires `KHR_materials_thickness`.
+
+Based on Barré-Brisebois & Bouchard's screen-space approximation (GDC 2011) — a wrap-lighting trick, not full multi-scatter. Parameters: scale, distortion, power, color.
+
+- [Spec draft](https://github.com/ux3d/glTF/tree/extensions/KHR_materials_subsurface/extensions/2.0/Khronos/KHR_materials_subsurface)
+- [ScatteringSkull sample model](https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/Models/ScatteringSkull/README.md)
+
+### Implementation Plan
+1. Parse `KHR_materials_volume` (thickness, attenuation) and `KHR_materials_diffuse_transmission` from glTF — replaces standalone thickness maps
+2. Add Barré-Brisebois back-lighting in the fragment shader using volume thickness + transmission factor
+3. Screen-space irradiance blur pass (see TODO below)
+
+### TODO: Screen-Space SSS Blur Pass
+Add a post-lighting compute or fullscreen-quad pass that blurs diffuse lighting for subsurface scattering materials. Key constraints:
+- Only blur pixels flagged as SSS materials (use a stencil bit or G-buffer flag to mask)
+- Depth-modulated blur radius (nearby = wider blur, distant = tighter)
+- Separable blur (horizontal + vertical) for performance — 2x7 samples instead of 7x7
+- Kernel weights should approximate a diffusion profile (not a simple Gaussian)
+- Would be a new render graph stage (`SSSBlurStage`) after the opaque lighting pass
+- Reference: `~/github/Rendering/AdvancedVulkanDemos/em_assets/shaders/scene_subsurface_scattering/SubSurfaceScatteringIrradianceFrag.glsl`
+
 ## TODO: Refactor `app.cpp` (~2050 lines)
 
 ### 1. TOML Config → `AppConfig` struct (~230 lines)
