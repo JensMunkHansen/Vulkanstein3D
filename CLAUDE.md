@@ -23,56 +23,48 @@ Required extensions:
 ## IBL (Image-Based Lighting)
 
 ### Implementation
-- CPU-based processing (fast enough for 128x128 cubemaps)
-- BRDF LUT: 128x128, 256 samples
-- Irradiance map: 32x32 cubemap
-- Prefiltered environment: 128x128 cubemap
+- GPU compute shader generation (4 shaders: equirect_to_cubemap, irradiance, prefilter_env, brdf_lut)
+- Settings configurable via `[IBL]` section in TOML (resolution, sample counts)
+- Defaults: 256x256 cubemap, 2048 irradiance samples, 2048 prefilter samples, 1024 BRDF samples
+- BRDF LUT: 128x128, Smith-GGX correlated visibility (Khronos/Filament reference)
+- Irradiance map: 32x32 cubemap, cosine-weighted hemisphere with LOD-filtered sampling
+- Prefiltered environment: 256x256 cubemap, GGX importance sampling with mip chain
+- Re-runs full compute pipeline on HDR environment switch (near-instant on GPU)
 
-## TODO: Back-face Culling (doubleSided)
+## Render Graph
 
-glTF materials default to `doubleSided: false`, meaning back faces should be culled. Currently we render all faces (no culling), causing interior/back-facing polygons to show up with wrong IBL and emissive (e.g. purple bottom on DamagedHelmet instead of black).
+Implemented with 5 fixed stages in `sps/vulkan/stages/`:
+- `RasterOpaqueStage` — OPAQUE + MASK primitives
+- `RasterBlendStage` — sorted BLEND primitives, depth write off
+- `Debug2DStage` — fullscreen quad texture viewer
+- `RayTracingStage` — trace + blit to swapchain
+- `UIStage` — ImGui callback
 
-Fix: read `doubleSided` from glTF materials and set `vk::CullModeFlagBits::eBack` in the pipeline for single-sided materials. Also remove the shader normal flip (`if (dot(N,V) < 0) N = -N`) for single-sided materials.
+Stages registered in `finalize_setup()`, no-ops via `is_enabled()` + early returns.
+`FrameContext` passes per-frame data — stages don't own Vulkan resources.
 
-## Future: Render Graph (Inexor-inspired)
+### Future Improvements
+- Stages could own their pipeline creation (currently in `app.cpp`)
+- RT stage could own its resources (storage image, descriptor, acceleration structures)
+- Declarative resource creation (logical → physical during `compile()`)
+- Compute stages for IBL regeneration, post-processing
 
-Reference implementation: `~/github/Rendering/inexor/` (local clone)
-- Header: `include/inexor/vulkan-renderer/render_graph.hpp`
-- Source: `src/vulkan-renderer/render_graph.cpp`
-- Example: `example-app/renderer.cpp`
+## TODO: Refactor `app.cpp` (~2050 lines)
 
-Inexor uses a logical/physical split pattern with dependency-driven stage ordering.
+### 1. TOML Config → `AppConfig` struct (~230 lines)
+Extract `load_toml_configuration_file()` into a `AppConfig parse_toml(path)` free function returning a plain struct. Decouples config format from initialization logic. Easiest win.
 
-### Motivation
+### 2. Ray Tracing Resources → `RayTracingStage` or `RayTracingResources` (~250 lines)
+Move `create_rt_storage_image()`, `create_rt_descriptor()`, `create_rt_pipeline()`, `build_acceleration_structures()` out of app. The stage already records commands but doesn't own its resources.
 
-`Application::record_draw_commands()` in `app.cpp` has grown complex — it now handles:
-- Ray tracing path (image barriers, trace, blit to swapchain)
-- Rasterization path with 2D debug mode
-- Two-pass alpha draw (opaque+mask pass, then sorted blend pass)
-- UI callback injection (ImGui)
+### 3. Command System → `CommandHandler` (~160 lines)
+`poll_commands()` has both registry setup and file polling. Command lambdas capture `this` for 15+ operations. Could extract to a class that takes an `Application&` reference.
 
-Each of these is a logical stage that should be independently testable and composable.
+### 4. Screenshot System → `ScreenshotManager` (~80 lines)
+`save_screenshot()`, `begin_screenshot_all()`, `tick_screenshot_all()` — self-contained state machine with its own member variables.
 
-### Plan
+### 5. Pipeline Creation → Render Graph Stages (~120 lines)
+`make_pipeline()`, `create_debug_2d_pipeline()`, `create_light_indicator()` — each stage could own its pipeline creation.
 
-1. **Extract raster/RT paths into stages** — Move the current raster and ray tracing command recording out of `Application::record_draw_commands()` into separate stage objects. Each stage implements an `on_record(vk::CommandBuffer, uint32_t imageIndex)` callback. Inexor reference: `GraphicsStage` with `on_record` in `render_graph.hpp`.
-2. **Create a `RenderGraph` class** — Owns render passes, pipelines, and framebuffers. Manages compilation (creating Vulkan objects from logical descriptions) and per-frame recording. The graph iterates stages in order, calling each stage's `on_record()`.
-3. **Declarative resource creation** — Buffer and texture resources described logically (`BufferResource`, `TextureResource`), then realized into physical Vulkan objects during `compile()`.
-4. **Keep it simpler than Inexor** — Skip the dependency DFS for now (fixed pipeline order). Focus on decoupling `Application` from raw Vulkan object management. Add compute stages and dependency ordering later if needed.
-
-### Candidate Stages (current codebase)
-
-| Stage | Pipeline | Render Pass | Notes |
-|---|---|---|---|
-| `RasterOpaqueStage` | `m_pipeline` | main | Draws OPAQUE + MASK primitives |
-| `RasterBlendStage` | `m_blend_pipeline` | main (same subpass) | Sorted BLEND primitives, depth write off |
-| `Debug2DStage` | `m_debug_2d_pipeline` | main | Fullscreen quad texture viewer |
-| `RayTracingStage` | `m_rt_pipeline` | none (compute-like) | Trace + blit to swapchain |
-| `UIStage` | (external) | main | ImGui callback |
-
-### Inexor Limitations to Avoid
-- No resource aliasing (every logical resource = 1 physical)
-- Full memory barrier between stages (no fine-grained sync)
-- Textures locked to swapchain dimensions
-- Descriptor management leaks into user code
-- Swapchain recreation destroys entire graph
+### 6. Vulkan Resource Creation → `FrameResources` (~150 lines)
+`create_depth_resources()`, `create_msaa_color_resources()`, `create_uniform_buffer()` — swapchain-dependent resources, natural fit for a dedicated class or moving into `recreate_swapchain()`.
