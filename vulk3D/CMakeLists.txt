@@ -5,6 +5,25 @@ endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/launch.sh.in" "${CMAKE_CURRENT_BINARY_DIR}/launch.sh" @ONLY)
 
+# Compute relative path from binary output directory to source data directory.
+# This is substituted into vulk3D.toml.in so asset paths work regardless of
+# build directory layout (single-config vs multi-config).
+get_property(_isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_isMultiConfig)
+  # Multi-config: binaries go to ${CMAKE_BINARY_DIR}/<Config>/${CMAKE_INSTALL_BINDIR}
+  # All configs have the same depth, so use "Release" as representative.
+  file(RELATIVE_PATH DATA_DIR
+    "${CMAKE_BINARY_DIR}/Release/${CMAKE_INSTALL_BINDIR}"
+    "${CMAKE_SOURCE_DIR}/data")
+else()
+  file(RELATIVE_PATH DATA_DIR
+    "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_BINDIR}"
+    "${CMAKE_SOURCE_DIR}/data")
+endif()
+
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml" @ONLY)
+
 if (0)
 set(TARGET_NAME vulk3D)
 add_executable(${TARGET_NAME} main.cpp)
@@ -33,12 +52,12 @@ target_link_libraries(app
 if (NOT SPS_VULKAN_DISPATCH_LOADER_DYNAMIC)
   target_link_libraries(app
     PRIVATE
-    ${Vulkan_LIBRARY}  
+    ${Vulkan_LIBRARY}
   )
 endif()
 
 add_custom_command(TARGET app POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml
   $<TARGET_FILE_DIR:app>/vulk3D.toml)
 
 # ImGui-enabled version
@@ -60,5 +79,5 @@ if (NOT SPS_VULKAN_DISPATCH_LOADER_DYNAMIC)
 endif()
 
 add_custom_command(TARGET app_imgui POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/vulk3D.toml
   $<TARGET_FILE_DIR:app_imgui>/vulk3D.toml)

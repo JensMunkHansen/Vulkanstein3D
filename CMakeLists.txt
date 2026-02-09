@@ -29,6 +29,14 @@ project(Vulkanstein3D
   C
   CXX)
 
+# Set up build directories (GNUInstallDirs layout, RPATH, multi-config output dirs)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/CMake")
+include(spsInstallDirs)
+
+# Create interface target for compiler/platform flags and include them
+add_library(build INTERFACE)
+include(spsCompilerPlatformFlags)
+
 option(VULK3D_FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." TRUE)
 
 if (VULK3D_FORCE_COLORED_OUTPUT)

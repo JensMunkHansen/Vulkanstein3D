@@ -1,8 +1,5 @@
 set(TARGET_NAME engine)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 # --- Resolve dependencies (prefer system, fall back to FetchContent) ---
 
 # spdlog
@@ -149,6 +146,7 @@ target_include_directories(${TARGET_NAME}
   PRIVATE "${STB_INCLUDE_DIR}")
 
 target_link_libraries(${TARGET_NAME}
+  PUBLIC build
   ${SPDLOG_TARGET}
   ${TOML11_TARGET}
   ${GLFW_TARGET}

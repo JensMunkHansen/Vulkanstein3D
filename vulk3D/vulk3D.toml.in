@@ -38,16 +38,16 @@ msaa_samples = 4
 # Geometry source: "triangle" (built-in default), "ply", or "gltf"
 source = "gltf"
 
-hdr_file = "../../data/neutral.hdr"
+hdr_file = "@DATA_DIR@/neutral.hdr"
 
 # Path to PLY file (used when source = "ply")
-ply_file = "../../data/VertexColorLowerJawScan.ply"
+ply_file = "@DATA_DIR@/VertexColorLowerJawScan.ply"
 
 # Path to glTF file (used when source = "gltf")
-gltf_file = "../../data/DamagedHelmet/DamagedHelmet.glb"
-# gltf_file = "../../data/CompareMetallic/glTF/CompareMetallic.gltf"
-#gltf_file = "../../data/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf"
-#gltf_file = "../../data/CarConcept/glTF/CarConcept.gltf"
+gltf_file = "@DATA_DIR@/DamagedHelmet/DamagedHelmet.glb"
+# gltf_file = "@DATA_DIR@/CompareMetallic/glTF/CompareMetallic.gltf"
+#gltf_file = "@DATA_DIR@/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf"
+#gltf_file = "@DATA_DIR@/CarConcept/glTF/CarConcept.gltf"
 
 [application.lighting]
 # Light type: "directional", "point", or "area"
@@ -106,14 +106,14 @@ files = [
 # https://www.khronos.org/gltf/
 [glTFmodels]
 files = [
-      "../../data/DamagedHelmet/DamagedHelmet.glb",
-      "../../data/CompareMetallic/glTF/CompareMetallic.gltf",
-      "../../data/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
+      "@DATA_DIR@/DamagedHelmet/DamagedHelmet.glb",
+      "@DATA_DIR@/CompareMetallic/glTF/CompareMetallic.gltf",
+      "@DATA_DIR@/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
 ]
 
 [HDRenvironments]
 files = [
-      "../../data/neutral.hdr",
-      "../../data/footprint_court.hdr",
-      "../../data/lightroom_14b.hdr",
+      "@DATA_DIR@/neutral.hdr",
+      "@DATA_DIR@/footprint_court.hdr",
+      "@DATA_DIR@/lightroom_14b.hdr",
 ]
