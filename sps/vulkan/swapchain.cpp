@@ -114,33 +114,37 @@ std::optional<vk::SurfaceFormatKHR> Swapchain::choose_surface_format(
   spdlog::trace("None of the surface formats of the priority list are supported");
   spdlog::trace("Selecting surface format from default list");
 
+  // UNORM formats: shader does manual linearToSRGB(), no hardware auto-conversion.
+  // sRGB formats: hardware auto-converts linear->sRGB on write — would DOUBLE-gamma
+  // with our manual conversion. Always prefer UNORM.
   static const std::vector<vk::SurfaceFormatKHR> default_surface_format_priority_list{
-    //    { vk::Format::eR8G8B8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear },
+    { vk::Format::eB8G8R8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear },
     { vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear },
-    { vk::Format::eB8G8R8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear }
+    { vk::Format::eB8G8R8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear },
+    { vk::Format::eR8G8B8A8Srgb, vk::ColorSpaceKHR::eSrgbNonlinear },
   };
 
-  std::optional<vk::SurfaceFormatKHR> chosen_format{};
-
-  // Try to find one of the formats in the default list
-  for (const auto available_format : available_formats)
+  // Iterate the priority list (highest priority first), return first available match
+  for (const auto& preferred : default_surface_format_priority_list)
   {
-    const auto format = std::find_if(default_surface_format_priority_list.begin(),
-      default_surface_format_priority_list.end(),
+    const auto it = std::find_if(available_formats.begin(), available_formats.end(),
       [&](const vk::SurfaceFormatKHR candidate)
       {
-        return available_format.format == candidate.format &&
-          available_format.colorSpace == candidate.colorSpace;
+        return preferred.format == candidate.format &&
+          preferred.colorSpace == candidate.colorSpace;
       });
 
-    if (format != default_surface_format_priority_list.end())
+    if (it != available_formats.end())
     {
-      spdlog::trace("Selecting swapchain image format {}", utils::as_string(*format));
-      chosen_format = *format;
+      spdlog::trace("Selecting swapchain image format {}", utils::as_string(*it));
+      return *it;
     }
   }
-  // This can be std::nullopt
-  return chosen_format;
+
+  // No match — return first available as last resort
+  spdlog::warn("No preferred swapchain format found, using first available: {}",
+    utils::as_string(available_formats.front()));
+  return available_formats.front();
 }
 
 std::vector<vk::Image> Swapchain::get_swapchain_images()
@@ -216,6 +220,20 @@ void Swapchain::setup_swapchain(
 
   // m_surface_format = sps::vulkan::choose_swapchain_surface_format(formats);
   m_surface_format = choose_surface_format(formats);
+
+  if (m_surface_format)
+  {
+    spdlog::info("Selected swapchain format: {} ({})",
+      vk::to_string(m_surface_format->format), vk::to_string(m_surface_format->colorSpace));
+
+    // Warn if we ended up with an sRGB format (shader does manual gamma)
+    const auto fmt = m_surface_format->format;
+    if (fmt == vk::Format::eB8G8R8A8Srgb || fmt == vk::Format::eR8G8B8A8Srgb)
+    {
+      spdlog::warn("sRGB swapchain format selected — shader does manual linearToSRGB(), "
+        "this will cause double gamma correction!");
+    }
+  }
 
   const vk::Extent2D requested_extent{ width, height };
 
