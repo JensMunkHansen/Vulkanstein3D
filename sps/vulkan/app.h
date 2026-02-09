@@ -1,5 +1,6 @@
 #pragma once
 #include <ctime>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <sps/vulkan/config.h>
@@ -140,7 +141,9 @@ public:
 
   // Screenshot
   bool save_screenshot(const std::string& filepath);
-  bool save_screenshot(); // Auto-generate filename
+  bool save_screenshot(); // Auto-generate filename from current model name
+  void begin_screenshot_all(); // Start cycling all models (one per frame)
+  void tick_screenshot_all();  // Called each frame to advance the cycle
 
   // 2D Debug mode
   bool& debug_2d_mode() { return m_debug_2d_mode; }
@@ -280,10 +283,15 @@ private:
   bool m_use_normal_mapping = true; // Normal mapping enabled by default
   bool m_use_emissive = true;       // Emissive texture enabled by default
   bool m_use_ao = true;             // Ambient occlusion enabled by default
-  bool m_use_ibl = false;           // IBL disabled by default (use direct lighting)
+  bool m_use_ibl = true;            // IBL enabled by default
   int m_tonemap_mode =
     5; // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR
   int m_current_shader_mode = 0; // Index into shader_modes[]
+
+  // Screenshot-all state machine
+  int m_screenshot_all_index = -1;       // -1 = not active, >=0 = current model to screenshot
+  int m_screenshot_all_restore = -1;     // model index to restore after completion
+  int m_screenshot_all_frames_wait = 0;  // frames to wait after model load before capture
 
   // 2D Debug mode
   bool m_debug_2d_mode = false;
@@ -299,7 +307,7 @@ private:
   // Command file remote control
   std::unique_ptr<CommandRegistry> m_command_registry;
   std::string m_command_file_path{ "./commands.txt" };
-  time_t m_command_file_mtime{ 0 };
+  std::filesystem::file_time_type m_command_file_mtime = std::filesystem::file_time_type::min();
 
   // Current shader paths
   std::string m_vertex_shader_path;

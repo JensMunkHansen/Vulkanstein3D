@@ -275,11 +275,15 @@ void Swapchain::setup_swapchain(
   const vk::Extent2D chosen_extent = choose_image_extent(
     requested_extent, caps.minImageExtent, caps.maxImageExtent, caps.currentExtent);
 
-  // Usage flags: color attachment for raster, transfer dst for RT blit
+  // Usage flags: color attachment for raster, transfer dst for RT blit, transfer src for screenshots
   vk::ImageUsageFlags imageUsage = vk::ImageUsageFlagBits::eColorAttachment;
   if (caps.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst)
   {
     imageUsage |= vk::ImageUsageFlagBits::eTransferDst;
+  }
+  if (caps.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferSrc)
+  {
+    imageUsage |= vk::ImageUsageFlagBits::eTransferSrc;
   }
 
   vk::SwapchainCreateInfoKHR createInfo =

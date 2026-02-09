@@ -976,6 +976,15 @@ void Application::key_callback(GLFWwindow* window, int key, int scancode, int ac
     app->m_use_raytracing = !app->m_use_raytracing;
     spdlog::info("Rendering mode: {}", app->m_use_raytracing ? "Ray Tracing" : "Rasterization");
   }
+
+  // F12 to save screenshot
+  if (key == GLFW_KEY_F12 && action == GLFW_PRESS)
+  {
+    if (mods & GLFW_MOD_SHIFT)
+      app->begin_screenshot_all(); // Shift+F12: screenshot all models
+    else
+      app->save_screenshot(); // F12: screenshot current model
+  }
 }
 
 void Application::mouse_callback(GLFWwindow* window, double xpos, double ypos)
@@ -1516,8 +1525,65 @@ bool Application::save_screenshot(const std::string& filepath)
 
 bool Application::save_screenshot()
 {
-  std::string filename = sps::vulkan::generate_screenshot_filename("screenshot", ".png");
+  // Use model name as prefix if a model is loaded
+  std::string prefix = "screenshot";
+  if (m_current_model_index >= 0 && m_current_model_index < static_cast<int>(m_gltf_models.size()))
+  {
+    prefix = std::filesystem::path(m_gltf_models[m_current_model_index]).stem().string();
+  }
+
+  std::filesystem::create_directories("screenshots");
+  std::string filename = "screenshots/" + sps::vulkan::generate_screenshot_filename(prefix, ".png");
   return save_screenshot(filename);
+}
+
+void Application::begin_screenshot_all()
+{
+  if (m_gltf_models.empty())
+  {
+    spdlog::warn("No models configured for screenshots");
+    return;
+  }
+
+  std::filesystem::create_directories("screenshots");
+  m_screenshot_all_restore = m_current_model_index;
+  m_screenshot_all_index = 0;
+  m_screenshot_all_frames_wait = 2; // load first model, wait 2 frames before capture
+  load_model(0);
+  spdlog::info("Screenshot all: starting ({} models)", m_gltf_models.size());
+}
+
+void Application::tick_screenshot_all()
+{
+  if (m_screenshot_all_index < 0)
+    return; // not active
+
+  if (m_screenshot_all_frames_wait > 0)
+  {
+    --m_screenshot_all_frames_wait;
+    return; // wait for rendered frame to settle
+  }
+
+  // Capture current model
+  save_screenshot();
+  spdlog::info("Screenshot all: saved {}/{}",
+    m_screenshot_all_index + 1, static_cast<int>(m_gltf_models.size()));
+
+  // Advance to next model
+  ++m_screenshot_all_index;
+  if (m_screenshot_all_index < static_cast<int>(m_gltf_models.size()))
+  {
+    load_model(m_screenshot_all_index);
+    m_screenshot_all_frames_wait = 2; // wait for new model to render
+  }
+  else
+  {
+    // Done — restore original model
+    spdlog::info("Screenshot all: complete");
+    m_screenshot_all_index = -1;
+    if (m_screenshot_all_restore >= 0)
+      load_model(m_screenshot_all_restore);
+  }
 }
 
 void Application::poll_commands()
@@ -1589,6 +1655,13 @@ void Application::poll_commands()
         }
       });
 
+    // Register "screenshot_all" command
+    m_command_registry->add("screenshot_all", "Screenshot all models", "",
+      [this](const std::vector<std::string>&)
+      {
+        begin_screenshot_all();
+      });
+
     // Register "mode" command for 2D/3D toggle
     m_command_registry->add("mode", "Switch 2D/3D mode", "<2d|3d>",
       [this](const std::vector<std::string>& args)
@@ -1612,10 +1685,10 @@ void Application::poll_commands()
   }
 
   auto file_time = std::filesystem::last_write_time(m_command_file_path);
-  auto file_mtime = file_time.time_since_epoch().count();
-  if (file_mtime <= static_cast<decltype(file_mtime)>(m_command_file_mtime))
+  if (file_time <= m_command_file_mtime)
     return;
-  m_command_file_mtime = static_cast<time_t>(file_mtime);
+  spdlog::info("Command file changed, processing...");
+  m_command_file_mtime = file_time;
 
   // Read and execute commands
   std::ifstream file(m_command_file_path);
@@ -1638,7 +1711,7 @@ void Application::poll_commands()
     }
   }
 
-  // Clear the file
+  // Clear the file and update mtime to avoid re-reading the cleared file
   std::ofstream clear_file(m_command_file_path);
   clear_file << "# Commands: set <var> <val>, shader <idx>, screenshot [file], mode <2d|3d>\n";
   clear_file << "# Variables: metallic_ambient, ao_strength, shininess, specular\n";
@@ -1646,6 +1719,7 @@ void Application::poll_commands()
   clear_file << "# texture: 0=base, 1=normal, 2=metalRough, 3=emissive, 4=ao\n";
   clear_file << "# channel: 0=RGB, 1=R, 2=G, 3=B, 4=A\n";
   clear_file.close();
+  m_command_file_mtime = std::filesystem::last_write_time(m_command_file_path);
 }
 
 void Application::load_model(int index)

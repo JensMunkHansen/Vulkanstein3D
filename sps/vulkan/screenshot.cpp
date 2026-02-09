@@ -101,9 +101,12 @@ bool save_screenshot(
     {}, {}, {}, barrier);
 
   // Copy or blit the image
+  // Track whether blit handled format conversion (no CPU swizzle needed)
+  bool blit_converted = false;
   if (supports_blit && format != vk::Format::eR8G8B8A8Unorm)
   {
-    // Use blit for format conversion
+    // Use blit for format conversion (GPU handles BGRA->RGBA)
+    blit_converted = true;
     vk::ImageBlit blit_region{};
     blit_region.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
     blit_region.srcSubresource.layerCount = 1;
@@ -194,9 +197,10 @@ bool save_screenshot(
     const uint8_t* row = reinterpret_cast<const uint8_t*>(data + y * layout.rowPitch);
     for (uint32_t x = 0; x < extent.width; ++x)
     {
-      // Handle BGRA -> RGBA swizzle if needed
+      // Handle BGRA -> RGBA swizzle only if blit didn't already convert
       size_t dst_idx = (y * extent.width + x) * 4;
-      if (format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb)
+      if (!blit_converted &&
+          (format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb))
       {
         pixels[dst_idx + 0] = row[x * 4 + 2];  // R <- B
         pixels[dst_idx + 1] = row[x * 4 + 1];  // G <- G

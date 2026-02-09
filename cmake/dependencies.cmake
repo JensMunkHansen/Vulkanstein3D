@@ -6,6 +6,7 @@
 
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
 # Ensure Git LFS files are pulled for this repository
 find_program(GIT_LFS git-lfs)

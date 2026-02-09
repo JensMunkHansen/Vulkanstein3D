@@ -105,7 +105,9 @@ int main(int argc, char* argv[])
     // Track current shader mode (shared across sections)
     static int current_shader = SHADER_PBR;
 
-    // UI Panel
+    // UI Panel — position top-left and start collapsed
+    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Once);
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_Once);
     ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
     if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_DefaultOpen))
@@ -343,6 +345,7 @@ int main(int argc, char* argv[])
 
     // Render scene
     app.render();
+    app.tick_screenshot_all();
     app.calculateFrameRate();
   }
 
