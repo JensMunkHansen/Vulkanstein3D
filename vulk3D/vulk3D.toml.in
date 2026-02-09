@@ -119,3 +119,11 @@ files = [
       "@DATA_DIR@/footprint_court.hdr",
       "@DATA_DIR@/lightroom_14b.hdr",
 ]
+
+[IBL]
+# Cubemap face resolution (default 256)
+resolution = 256
+# Sample counts for compute shader IBL generation
+irradiance_samples = 2048
+prefilter_samples = 2048
+brdf_samples = 1024

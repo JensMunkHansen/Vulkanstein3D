@@ -35,6 +35,13 @@ set(RT_SHADERS
   closesthit.rchit
 )
 
+set(COMPUTE_SHADERS
+  equirect_to_cubemap.comp
+  irradiance.comp
+  prefilter_env.comp
+  brdf_lut.comp
+)
+
 # Compile shaders that use #include (need --include-dir)
 foreach(SHADER ${SHADERS_WITH_INCLUDES})
   get_filename_component(FILE_NAME ${SHADER} NAME_WLE)
@@ -76,8 +83,21 @@ foreach(SHADER ${RT_SHADERS})
   list(APPEND SPIRV_FILES ${SPIRV})
 endforeach()
 
-source_group("Shader Files" FILES ${SHADERS_WITH_INCLUDES} ${SHADERS} ${RT_SHADERS})
+# Compute shaders (plain, no includes)
+foreach(SHADER ${COMPUTE_SHADERS})
+  get_filename_component(FILE_NAME ${SHADER} NAME_WLE)
+  set(SPIRV ${CMAKE_CURRENT_BINARY_DIR}/${FILE_NAME}.spv)
+  add_custom_command(
+    OUTPUT ${SPIRV}
+    COMMAND ${GLSL_VALIDATOR} -V ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} -o ${SPIRV}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}
+  )
+
+  list(APPEND SPIRV_FILES ${SPIRV})
+endforeach()
+
+source_group("Shader Files" FILES ${SHADERS_WITH_INCLUDES} ${SHADERS} ${RT_SHADERS} ${COMPUTE_SHADERS})
 source_group("Shader Includes" FILES ${SHADER_INCLUDES})
 
 add_custom_target(vulkan-shaders DEPENDS ${SPIRV_FILES}
-  SOURCES ${SHADERS_WITH_INCLUDES} ${SHADERS} ${RT_SHADERS} ${SHADER_INCLUDES})
+  SOURCES ${SHADERS_WITH_INCLUDES} ${SHADERS} ${RT_SHADERS} ${COMPUTE_SHADERS} ${SHADER_INCLUDES})

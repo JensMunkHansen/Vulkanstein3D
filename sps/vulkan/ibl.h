@@ -9,6 +9,15 @@ namespace sps::vulkan
 class Device;
 class Texture;
 
+/// @brief IBL compute shader generation settings
+struct IBLSettings
+{
+  uint32_t resolution{ 256 };
+  uint32_t irradiance_samples{ 2048 };
+  uint32_t prefilter_samples{ 2048 };
+  uint32_t brdf_samples{ 1024 };
+};
+
 /// @brief Image-Based Lighting (IBL) resources
 /// Contains pre-computed environment maps for PBR rendering:
 /// - BRDF LUT: 2D lookup table for split-sum approximation
@@ -20,8 +29,8 @@ public:
   /// @brief Create IBL resources
   /// @param device Vulkan device
   /// @param hdr_path Path to HDR environment map (equirectangular format)
-  /// @param resolution Cubemap face resolution (default 512)
-  IBL(const Device& device, const std::string& hdr_path, uint32_t resolution = 512);
+  /// @param settings IBL generation settings (resolution, sample counts)
+  IBL(const Device& device, const std::string& hdr_path, const IBLSettings& settings = {});
 
   /// @brief Create IBL with default neutral environment (for testing)
   explicit IBL(const Device& device);
@@ -47,14 +56,14 @@ public:
   void set_intensity(float intensity) { m_intensity = intensity; }
 
 private:
-  void generate_brdf_lut();
   void load_hdr_environment(const std::string& hdr_path);
-  void create_cubemap_from_equirectangular();
-  void generate_irradiance_map();
-  void generate_prefiltered_map();
+  void upload_hdr_to_gpu();
+  void create_ibl_images();
+  void run_compute_generation();
   void create_default_environment();
 
   const Device& m_device;
+  IBLSettings m_settings;
   uint32_t m_resolution;
   uint32_t m_mip_levels;
   float m_intensity{ 1.0f };
@@ -77,26 +86,16 @@ private:
   vk::ImageView m_prefiltered_view{ VK_NULL_HANDLE };
   vk::Sampler m_prefiltered_sampler{ VK_NULL_HANDLE };
 
-  // Source HDR environment (equirectangular)
+  // Source HDR environment (equirectangular, GPU texture)
   vk::Image m_hdr_image{ VK_NULL_HANDLE };
   vk::DeviceMemory m_hdr_memory{ VK_NULL_HANDLE };
   vk::ImageView m_hdr_view{ VK_NULL_HANDLE };
+  vk::Sampler m_hdr_sampler{ VK_NULL_HANDLE };
 
-  // CPU-side HDR data for processing
+  // CPU-side HDR data for upload
   std::vector<float> m_hdr_data;
   uint32_t m_hdr_width{ 0 };
   uint32_t m_hdr_height{ 0 };
-
-  // Helper functions for CPU-based IBL processing
-  void create_cubemap_image(vk::Image& image, vk::DeviceMemory& memory,
-                            uint32_t size, uint32_t mip_levels, vk::Format format);
-  void upload_cubemap_data(vk::Image image, const std::vector<float>& data,
-                           uint32_t size, uint32_t mip_levels);
 };
-
-/// @brief Generate BRDF integration LUT on CPU
-/// @param size Resolution of the LUT (e.g., 512)
-/// @return RGBA pixel data (RG channels used)
-std::vector<uint8_t> generate_brdf_lut_cpu(uint32_t size);
 
 } // namespace sps::vulkan

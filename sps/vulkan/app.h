@@ -66,6 +66,7 @@ private:
   int m_current_model_index = -1;          // Index into m_gltf_models (-1 = none)
   std::vector<std::string> m_hdr_files;   // From TOML: [HDRenvironments].files
   int m_current_hdr_index = -1;           // Index into m_hdr_files (-1 = none)
+  IBLSettings m_ibl_settings;             // From TOML: [IBL]
 
 public:
   Application(int argc, char* argv[]);

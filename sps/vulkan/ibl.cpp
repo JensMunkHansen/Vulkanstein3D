@@ -1,6 +1,8 @@
 #include <sps/vulkan/ibl.h>
 #include <sps/vulkan/buffer.h>
+#include <sps/vulkan/config.h>
 #include <sps/vulkan/device.h>
+#include <sps/vulkan/shaders.h>
 
 #include <spdlog/spdlog.h>
 #include <stb_image.h>
@@ -17,6 +19,8 @@ namespace
 // Helper to transition image layout
 void transition_image_layout(vk::CommandBuffer cmd, vk::Image image, vk::ImageLayout old_layout,
   vk::ImageLayout new_layout, uint32_t mip_levels, uint32_t layer_count,
+  vk::PipelineStageFlags src_stage, vk::PipelineStageFlags dst_stage,
+  vk::AccessFlags src_access, vk::AccessFlags dst_access,
   vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor)
 {
   vk::ImageMemoryBarrier barrier{};
@@ -30,34 +34,32 @@ void transition_image_layout(vk::CommandBuffer cmd, vk::Image image, vk::ImageLa
   barrier.subresourceRange.levelCount = mip_levels;
   barrier.subresourceRange.baseArrayLayer = 0;
   barrier.subresourceRange.layerCount = layer_count;
+  barrier.srcAccessMask = src_access;
+  barrier.dstAccessMask = dst_access;
 
-  vk::PipelineStageFlags src_stage;
-  vk::PipelineStageFlags dst_stage;
+  cmd.pipelineBarrier(src_stage, dst_stage, {}, {}, {}, barrier);
+}
 
-  if (old_layout == vk::ImageLayout::eUndefined &&
-      new_layout == vk::ImageLayout::eTransferDstOptimal)
-  {
-    barrier.srcAccessMask = {};
-    barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-    src_stage = vk::PipelineStageFlagBits::eTopOfPipe;
-    dst_stage = vk::PipelineStageFlagBits::eTransfer;
-  }
-  else if (old_layout == vk::ImageLayout::eTransferDstOptimal &&
-           new_layout == vk::ImageLayout::eShaderReadOnlyOptimal)
-  {
-    barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-    src_stage = vk::PipelineStageFlagBits::eTransfer;
-    dst_stage = vk::PipelineStageFlagBits::eFragmentShader;
-  }
-  else
-  {
-    // Generic transition
-    barrier.srcAccessMask = vk::AccessFlagBits::eMemoryWrite;
-    barrier.dstAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eShaderRead;
-    src_stage = vk::PipelineStageFlagBits::eAllCommands;
-    dst_stage = vk::PipelineStageFlagBits::eAllCommands;
-  }
+// Overload for single mip level barrier
+void transition_mip_layout(vk::CommandBuffer cmd, vk::Image image,
+  vk::ImageLayout old_layout, vk::ImageLayout new_layout,
+  uint32_t mip_level, uint32_t layer_count,
+  vk::PipelineStageFlags src_stage, vk::PipelineStageFlags dst_stage,
+  vk::AccessFlags src_access, vk::AccessFlags dst_access)
+{
+  vk::ImageMemoryBarrier barrier{};
+  barrier.oldLayout = old_layout;
+  barrier.newLayout = new_layout;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = image;
+  barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  barrier.subresourceRange.baseMipLevel = mip_level;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = layer_count;
+  barrier.srcAccessMask = src_access;
+  barrier.dstAccessMask = dst_access;
 
   cmd.pipelineBarrier(src_stage, dst_stage, {}, {}, {}, barrier);
 }
@@ -96,99 +98,97 @@ void end_single_time_commands(
   device.device().freeCommandBuffers(pool, cmd);
 }
 
-} // namespace
-
-// CPU-based BRDF LUT generation (split-sum approximation)
-// Reference: https://learnopengl.com/PBR/IBL/Specular-IBL
-std::vector<uint8_t> generate_brdf_lut_cpu(uint32_t size)
+// Create a GPU image with memory
+void create_image(const Device& device, vk::Image& image, vk::DeviceMemory& memory,
+  uint32_t width, uint32_t height, uint32_t mip_levels, uint32_t array_layers,
+  vk::Format format, vk::ImageUsageFlags usage, vk::ImageCreateFlags flags = {})
 {
-  std::vector<uint8_t> data(size * size * 4); // RGBA
+  auto dev = device.device();
 
-  auto radical_inverse_vdc = [](uint32_t bits) -> float {
-    bits = (bits << 16u) | (bits >> 16u);
-    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
-    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
-    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
-    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
-    return static_cast<float>(bits) * 2.3283064365386963e-10f;
-  };
+  vk::ImageCreateInfo info{};
+  info.imageType = vk::ImageType::e2D;
+  info.format = format;
+  info.extent = vk::Extent3D{ width, height, 1 };
+  info.mipLevels = mip_levels;
+  info.arrayLayers = array_layers;
+  info.samples = vk::SampleCountFlagBits::e1;
+  info.tiling = vk::ImageTiling::eOptimal;
+  info.usage = usage;
+  info.sharingMode = vk::SharingMode::eExclusive;
+  info.initialLayout = vk::ImageLayout::eUndefined;
+  info.flags = flags;
 
-  auto hammersley = [&](uint32_t i, uint32_t n) -> std::pair<float, float> {
-    return { static_cast<float>(i) / static_cast<float>(n), radical_inverse_vdc(i) };
-  };
+  image = dev.createImage(info);
 
-  auto importance_sample_ggx =
-    [](std::pair<float, float> xi, float roughness) -> std::array<float, 3> {
-    float a = roughness * roughness;
-    float phi = 2.0f * 3.14159265359f * xi.first;
-    float cos_theta = std::sqrt((1.0f - xi.second) / (1.0f + (a * a - 1.0f) * xi.second));
-    float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+  auto mem_reqs = dev.getImageMemoryRequirements(image);
+  vk::MemoryAllocateInfo alloc{};
+  alloc.allocationSize = mem_reqs.size;
+  alloc.memoryTypeIndex =
+    device.find_memory_type(mem_reqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-    return { std::cos(phi) * sin_theta, std::sin(phi) * sin_theta, cos_theta };
-  };
-
-  constexpr uint32_t SAMPLE_COUNT = 256;  // Reduced from 1024 for faster CPU generation
-
-  for (uint32_t y = 0; y < size; ++y)
-  {
-    float roughness = (static_cast<float>(y) + 0.5f) / static_cast<float>(size);
-    roughness = std::max(roughness, 0.001f); // Avoid zero roughness
-
-    for (uint32_t x = 0; x < size; ++x)
-    {
-      float NdotV = (static_cast<float>(x) + 0.5f) / static_cast<float>(size);
-      NdotV = std::max(NdotV, 0.001f);
-
-      std::array<float, 3> V = { std::sqrt(1.0f - NdotV * NdotV), 0.0f, NdotV };
-
-      float A = 0.0f;
-      float B = 0.0f;
-
-      for (uint32_t i = 0; i < SAMPLE_COUNT; ++i)
-      {
-        auto xi = hammersley(i, SAMPLE_COUNT);
-        auto H = importance_sample_ggx(xi, roughness);
-
-        // L = reflect(-V, H) = 2 * dot(V, H) * H - V
-        float VdotH = V[0] * H[0] + V[1] * H[1] + V[2] * H[2];
-        VdotH = std::max(VdotH, 0.0f);
-
-        std::array<float, 3> L = { 2.0f * VdotH * H[0] - V[0], 2.0f * VdotH * H[1] - V[1],
-          2.0f * VdotH * H[2] - V[2] };
-
-        float NdotL = std::max(L[2], 0.0f);
-        float NdotH = std::max(H[2], 0.0f);
-
-        if (NdotL > 0.0f)
-        {
-          // Geometry function (Smith GGX)
-          float a2 = roughness * roughness * roughness * roughness;
-          float G_V = NdotV / (NdotV * (1.0f - std::sqrt(a2 / 2.0f)) + std::sqrt(a2 / 2.0f));
-          float G_L = NdotL / (NdotL * (1.0f - std::sqrt(a2 / 2.0f)) + std::sqrt(a2 / 2.0f));
-          float G = G_V * G_L;
-
-          float G_Vis = (G * VdotH) / (NdotH * NdotV);
-          float Fc = std::pow(1.0f - VdotH, 5.0f);
-
-          A += (1.0f - Fc) * G_Vis;
-          B += Fc * G_Vis;
-        }
-      }
-
-      A /= static_cast<float>(SAMPLE_COUNT);
-      B /= static_cast<float>(SAMPLE_COUNT);
-
-      uint32_t idx = (y * size + x) * 4;
-      data[idx + 0] = static_cast<uint8_t>(std::clamp(A * 255.0f, 0.0f, 255.0f));
-      data[idx + 1] = static_cast<uint8_t>(std::clamp(B * 255.0f, 0.0f, 255.0f));
-      data[idx + 2] = 0;
-      data[idx + 3] = 255;
-    }
-  }
-
-  spdlog::info("Generated BRDF LUT ({}x{})", size, size);
-  return data;
+  memory = dev.allocateMemory(alloc);
+  dev.bindImageMemory(image, memory, 0);
 }
+
+// Helper struct for compute pipeline + layout + descriptor set layout
+struct ComputePipeline
+{
+  vk::Pipeline pipeline;
+  vk::PipelineLayout layout;
+  vk::DescriptorSetLayout desc_layout;
+};
+
+ComputePipeline create_compute_pipeline(vk::Device dev, const std::string& spv_path,
+  std::vector<vk::DescriptorSetLayoutBinding> bindings, uint32_t push_constant_size)
+{
+  ComputePipeline result{};
+
+  // Descriptor set layout
+  vk::DescriptorSetLayoutCreateInfo dsl_ci{};
+  dsl_ci.bindingCount = static_cast<uint32_t>(bindings.size());
+  dsl_ci.pBindings = bindings.data();
+  result.desc_layout = dev.createDescriptorSetLayout(dsl_ci);
+
+  // Pipeline layout
+  vk::PushConstantRange push_range{};
+  push_range.stageFlags = vk::ShaderStageFlagBits::eCompute;
+  push_range.offset = 0;
+  push_range.size = push_constant_size;
+
+  vk::PipelineLayoutCreateInfo pl_ci{};
+  pl_ci.setLayoutCount = 1;
+  pl_ci.pSetLayouts = &result.desc_layout;
+  pl_ci.pushConstantRangeCount = 1;
+  pl_ci.pPushConstantRanges = &push_range;
+  result.layout = dev.createPipelineLayout(pl_ci);
+
+  // Shader module
+  auto module = createModule(spv_path, dev, true);
+
+  vk::PipelineShaderStageCreateInfo stage{};
+  stage.stage = vk::ShaderStageFlagBits::eCompute;
+  stage.module = module;
+  stage.pName = "main";
+
+  vk::ComputePipelineCreateInfo ci{};
+  ci.stage = stage;
+  ci.layout = result.layout;
+
+  result.pipeline = dev.createComputePipeline(nullptr, ci).value;
+
+  dev.destroyShaderModule(module);
+
+  return result;
+}
+
+void destroy_compute_pipeline(vk::Device dev, ComputePipeline& cp)
+{
+  dev.destroyPipeline(cp.pipeline);
+  dev.destroyPipelineLayout(cp.layout);
+  dev.destroyDescriptorSetLayout(cp.desc_layout);
+}
+
+} // namespace
 
 IBL::IBL(const Device& device)
   : m_device(device)
@@ -197,22 +197,40 @@ IBL::IBL(const Device& device)
 {
   spdlog::info("Creating default neutral IBL environment");
   create_default_environment();
-  generate_brdf_lut();
 }
 
-IBL::IBL(const Device& device, const std::string& hdr_path, uint32_t resolution)
+IBL::IBL(const Device& device, const std::string& hdr_path, const IBLSettings& settings)
   : m_device(device)
-  , m_resolution(resolution)
-  , m_mip_levels(static_cast<uint32_t>(std::floor(std::log2(resolution))) + 1)
+  , m_settings(settings)
+  , m_resolution(settings.resolution)
+  , m_mip_levels(static_cast<uint32_t>(std::floor(std::log2(settings.resolution))) + 1)
 {
-  spdlog::info("Creating IBL from HDR: {} (resolution: {}, mips: {})", hdr_path, resolution,
-    m_mip_levels);
+  spdlog::info("Creating IBL from HDR: {} (resolution: {}, mips: {}, samples: irr={}, pf={}, brdf={})",
+    hdr_path, m_resolution, m_mip_levels,
+    m_settings.irradiance_samples, m_settings.prefilter_samples, m_settings.brdf_samples);
 
   load_hdr_environment(hdr_path);
-  create_cubemap_from_equirectangular();
-  generate_irradiance_map();
-  generate_prefiltered_map();
-  generate_brdf_lut();
+  upload_hdr_to_gpu();
+  create_ibl_images();
+  run_compute_generation();
+
+  // Cleanup CPU data and HDR GPU texture
+  m_hdr_data.clear();
+  m_hdr_data.shrink_to_fit();
+
+  auto dev = m_device.device();
+  if (m_hdr_sampler)
+    dev.destroySampler(m_hdr_sampler);
+  if (m_hdr_view)
+    dev.destroyImageView(m_hdr_view);
+  if (m_hdr_image)
+    dev.destroyImage(m_hdr_image);
+  if (m_hdr_memory)
+    dev.freeMemory(m_hdr_memory);
+  m_hdr_sampler = VK_NULL_HANDLE;
+  m_hdr_view = VK_NULL_HANDLE;
+  m_hdr_image = VK_NULL_HANDLE;
+  m_hdr_memory = VK_NULL_HANDLE;
 }
 
 IBL::~IBL()
@@ -249,7 +267,9 @@ IBL::~IBL()
   if (m_prefiltered_memory)
     dev.freeMemory(m_prefiltered_memory);
 
-  // HDR source cleanup
+  // HDR source cleanup (may already be freed)
+  if (m_hdr_sampler)
+    dev.destroySampler(m_hdr_sampler);
   if (m_hdr_view)
     dev.destroyImageView(m_hdr_view);
   if (m_hdr_image)
@@ -260,105 +280,8 @@ IBL::~IBL()
   spdlog::trace("IBL resources destroyed");
 }
 
-void IBL::generate_brdf_lut()
-{
-  constexpr uint32_t LUT_SIZE = 128;  // Reduced from 512 for faster CPU generation
-
-  auto dev = m_device.device();
-
-  // Generate LUT data on CPU
-  auto lut_data = generate_brdf_lut_cpu(LUT_SIZE);
-
-  // Create image
-  vk::ImageCreateInfo image_info{};
-  image_info.imageType = vk::ImageType::e2D;
-  image_info.format = vk::Format::eR8G8B8A8Unorm;
-  image_info.extent = vk::Extent3D{ LUT_SIZE, LUT_SIZE, 1 };
-  image_info.mipLevels = 1;
-  image_info.arrayLayers = 1;
-  image_info.samples = vk::SampleCountFlagBits::e1;
-  image_info.tiling = vk::ImageTiling::eOptimal;
-  image_info.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
-  image_info.sharingMode = vk::SharingMode::eExclusive;
-  image_info.initialLayout = vk::ImageLayout::eUndefined;
-
-  m_brdf_lut_image = dev.createImage(image_info);
-
-  // Allocate memory
-  auto mem_reqs = dev.getImageMemoryRequirements(m_brdf_lut_image);
-  vk::MemoryAllocateInfo alloc_info{};
-  alloc_info.allocationSize = mem_reqs.size;
-  alloc_info.memoryTypeIndex =
-    m_device.find_memory_type(mem_reqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_brdf_lut_memory = dev.allocateMemory(alloc_info);
-  dev.bindImageMemory(m_brdf_lut_image, m_brdf_lut_memory, 0);
-
-  // Create staging buffer and upload
-  Buffer staging(m_device, "BRDF LUT staging", lut_data.size(),
-    vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-  staging.update(lut_data.data(), lut_data.size());
-
-  // Create command pool and buffer
-  vk::CommandPoolCreateInfo pool_info{};
-  pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
-  pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
-  vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
-
-  auto cmd = begin_single_time_commands(m_device, cmd_pool);
-
-  // Transition and copy
-  transition_image_layout(
-    cmd, m_brdf_lut_image, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1, 1);
-
-  vk::BufferImageCopy region{};
-  region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-  region.imageSubresource.mipLevel = 0;
-  region.imageSubresource.baseArrayLayer = 0;
-  region.imageSubresource.layerCount = 1;
-  region.imageExtent = vk::Extent3D{ LUT_SIZE, LUT_SIZE, 1 };
-
-  cmd.copyBufferToImage(
-    staging.buffer(), m_brdf_lut_image, vk::ImageLayout::eTransferDstOptimal, region);
-
-  transition_image_layout(cmd, m_brdf_lut_image, vk::ImageLayout::eTransferDstOptimal,
-    vk::ImageLayout::eShaderReadOnlyOptimal, 1, 1);
-
-  end_single_time_commands(m_device, cmd_pool, cmd);
-  dev.destroyCommandPool(cmd_pool);
-
-  // Create image view
-  vk::ImageViewCreateInfo view_info{};
-  view_info.image = m_brdf_lut_image;
-  view_info.viewType = vk::ImageViewType::e2D;
-  view_info.format = vk::Format::eR8G8B8A8Unorm;
-  view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  view_info.subresourceRange.baseMipLevel = 0;
-  view_info.subresourceRange.levelCount = 1;
-  view_info.subresourceRange.baseArrayLayer = 0;
-  view_info.subresourceRange.layerCount = 1;
-
-  m_device.create_image_view(view_info, &m_brdf_lut_view, "BRDF LUT view");
-
-  // Create sampler
-  vk::SamplerCreateInfo sampler_info{};
-  sampler_info.magFilter = vk::Filter::eLinear;
-  sampler_info.minFilter = vk::Filter::eLinear;
-  sampler_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
-  sampler_info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.maxLod = 1.0f;
-
-  m_brdf_lut_sampler = dev.createSampler(sampler_info);
-
-  spdlog::trace("BRDF LUT created ({}x{})", LUT_SIZE, LUT_SIZE);
-}
-
 void IBL::load_hdr_environment(const std::string& hdr_path)
 {
-  // Load HDR image using stb_image
   int width, height, channels;
   float* hdr_data = stbi_loadf(hdr_path.c_str(), &width, &height, &channels, 4);
 
@@ -369,7 +292,6 @@ void IBL::load_hdr_environment(const std::string& hdr_path)
 
   spdlog::info("Loaded HDR: {}x{} (channels: {})", width, height, channels);
 
-  // Store in CPU memory for cubemap conversion
   m_hdr_width = static_cast<uint32_t>(width);
   m_hdr_height = static_cast<uint32_t>(height);
   m_hdr_data.resize(width * height * 4);
@@ -378,12 +300,568 @@ void IBL::load_hdr_environment(const std::string& hdr_path)
   stbi_image_free(hdr_data);
 }
 
+void IBL::upload_hdr_to_gpu()
+{
+  auto dev = m_device.device();
+
+  // Create HDR GPU texture (R32G32B32A32Sfloat, sampled)
+  create_image(m_device, m_hdr_image, m_hdr_memory,
+    m_hdr_width, m_hdr_height, 1, 1,
+    vk::Format::eR32G32B32A32Sfloat,
+    vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst);
+
+  // Upload via staging buffer
+  vk::DeviceSize data_size = m_hdr_width * m_hdr_height * 4 * sizeof(float);
+  Buffer staging(m_device, "HDR staging", data_size, vk::BufferUsageFlagBits::eTransferSrc,
+    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+  staging.update(m_hdr_data.data(), data_size);
+
+  vk::CommandPoolCreateInfo pool_info{};
+  pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
+  pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
+  vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
+
+  auto cmd = begin_single_time_commands(m_device, cmd_pool);
+
+  transition_image_layout(cmd, m_hdr_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1, 1,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
+    {}, vk::AccessFlagBits::eTransferWrite);
+
+  vk::BufferImageCopy region{};
+  region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+  region.imageSubresource.mipLevel = 0;
+  region.imageSubresource.baseArrayLayer = 0;
+  region.imageSubresource.layerCount = 1;
+  region.imageExtent = vk::Extent3D{ m_hdr_width, m_hdr_height, 1 };
+
+  cmd.copyBufferToImage(staging.buffer(), m_hdr_image,
+    vk::ImageLayout::eTransferDstOptimal, region);
+
+  transition_image_layout(cmd, m_hdr_image,
+    vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 1, 1,
+    vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+    vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
+
+  end_single_time_commands(m_device, cmd_pool, cmd);
+  dev.destroyCommandPool(cmd_pool);
+
+  // Create image view
+  vk::ImageViewCreateInfo view_info{};
+  view_info.image = m_hdr_image;
+  view_info.viewType = vk::ImageViewType::e2D;
+  view_info.format = vk::Format::eR32G32B32A32Sfloat;
+  view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  view_info.subresourceRange.baseMipLevel = 0;
+  view_info.subresourceRange.levelCount = 1;
+  view_info.subresourceRange.baseArrayLayer = 0;
+  view_info.subresourceRange.layerCount = 1;
+
+  m_device.create_image_view(view_info, &m_hdr_view, "HDR equirect view");
+
+  // Create sampler
+  vk::SamplerCreateInfo sampler_info{};
+  sampler_info.magFilter = vk::Filter::eLinear;
+  sampler_info.minFilter = vk::Filter::eLinear;
+  sampler_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
+  sampler_info.addressModeU = vk::SamplerAddressMode::eRepeat;
+  sampler_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+  sampler_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+  sampler_info.maxLod = 1.0f;
+
+  m_hdr_sampler = dev.createSampler(sampler_info);
+
+  spdlog::info("Uploaded HDR to GPU ({}x{})", m_hdr_width, m_hdr_height);
+}
+
+void IBL::create_ibl_images()
+{
+  auto dev = m_device.device();
+
+  constexpr uint32_t IRR_SIZE = 32;
+  constexpr uint32_t LUT_SIZE = 128;
+  constexpr float MAX_REFLECTION_LOD = 4.0f;
+
+  // --- Environment cubemap (storage write + sampled read + transfer for mip gen) ---
+  create_image(m_device, m_prefiltered_image, m_prefiltered_memory,
+    m_resolution, m_resolution, m_mip_levels, 6,
+    vk::Format::eR32G32B32A32Sfloat,
+    vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
+      vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst,
+    vk::ImageCreateFlagBits::eCubeCompatible);
+
+  // --- Irradiance cubemap ---
+  create_image(m_device, m_irradiance_image, m_irradiance_memory,
+    IRR_SIZE, IRR_SIZE, 1, 6,
+    vk::Format::eR32G32B32A32Sfloat,
+    vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+    vk::ImageCreateFlagBits::eCubeCompatible);
+
+  // --- BRDF LUT ---
+  create_image(m_device, m_brdf_lut_image, m_brdf_lut_memory,
+    LUT_SIZE, LUT_SIZE, 1, 1,
+    vk::Format::eR8G8B8A8Unorm,
+    vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+
+  // Create views
+
+  // Prefiltered cubemap view (all mips)
+  vk::ImageViewCreateInfo view_info{};
+  view_info.image = m_prefiltered_image;
+  view_info.viewType = vk::ImageViewType::eCube;
+  view_info.format = vk::Format::eR32G32B32A32Sfloat;
+  view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  view_info.subresourceRange.baseMipLevel = 0;
+  view_info.subresourceRange.levelCount = m_mip_levels;
+  view_info.subresourceRange.baseArrayLayer = 0;
+  view_info.subresourceRange.layerCount = 6;
+  m_device.create_image_view(view_info, &m_prefiltered_view, "Prefiltered cubemap view");
+
+  // Irradiance cubemap view
+  view_info.image = m_irradiance_image;
+  view_info.subresourceRange.levelCount = 1;
+  m_device.create_image_view(view_info, &m_irradiance_view, "Irradiance cubemap view");
+
+  // BRDF LUT view
+  vk::ImageViewCreateInfo lut_view_info{};
+  lut_view_info.image = m_brdf_lut_image;
+  lut_view_info.viewType = vk::ImageViewType::e2D;
+  lut_view_info.format = vk::Format::eR8G8B8A8Unorm;
+  lut_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  lut_view_info.subresourceRange.baseMipLevel = 0;
+  lut_view_info.subresourceRange.levelCount = 1;
+  lut_view_info.subresourceRange.baseArrayLayer = 0;
+  lut_view_info.subresourceRange.layerCount = 1;
+  m_device.create_image_view(lut_view_info, &m_brdf_lut_view, "BRDF LUT view");
+
+  // Create samplers
+  vk::SamplerCreateInfo sampler_info{};
+  sampler_info.magFilter = vk::Filter::eLinear;
+  sampler_info.minFilter = vk::Filter::eLinear;
+  sampler_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
+  sampler_info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+  sampler_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+  sampler_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+  sampler_info.maxLod = static_cast<float>(m_mip_levels);
+
+  m_prefiltered_sampler = dev.createSampler(sampler_info);
+
+  sampler_info.maxLod = 1.0f;
+  m_irradiance_sampler = dev.createSampler(sampler_info);
+  m_brdf_lut_sampler = dev.createSampler(sampler_info);
+
+  spdlog::info("Created IBL images (cubemap {}x{} {} mips, irradiance {}x{}, BRDF LUT {}x{})",
+    m_resolution, m_resolution, m_mip_levels, IRR_SIZE, IRR_SIZE, LUT_SIZE, LUT_SIZE);
+}
+
+void IBL::run_compute_generation()
+{
+  auto dev = m_device.device();
+
+  constexpr uint32_t IRR_SIZE = 32;
+  constexpr uint32_t LUT_SIZE = 128;
+  const uint32_t PREFILTER_SAMPLES = m_settings.prefilter_samples;
+  const uint32_t IRR_SAMPLES = m_settings.irradiance_samples;
+  const uint32_t BRDF_SAMPLES = m_settings.brdf_samples;
+  constexpr float MAX_REFLECTION_LOD = 4.0f;
+
+  // --- Create descriptor pool ---
+  // Sets: equirect(1) + irradiance(1) + brdf(1) + prefilter per-mip(m_mip_levels-1)
+  uint32_t prefilter_mip_count = m_mip_levels - 1; // mips 1..N
+  uint32_t total_sets = 3 + prefilter_mip_count;
+  // Combined image samplers: equirect(1) + irradiance(1) + prefilter per-mip(prefilter_mip_count)
+  uint32_t total_samplers = 2 + prefilter_mip_count;
+  // Storage images: equirect(1) + irradiance(1) + prefilter per-mip(prefilter_mip_count) + brdf(1)
+  uint32_t total_storage = 3 + prefilter_mip_count;
+
+  std::array<vk::DescriptorPoolSize, 2> pool_sizes = {
+    vk::DescriptorPoolSize{ vk::DescriptorType::eCombinedImageSampler, total_samplers },
+    vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, total_storage }
+  };
+
+  vk::DescriptorPoolCreateInfo pool_ci{};
+  pool_ci.maxSets = total_sets;
+  pool_ci.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+  pool_ci.pPoolSizes = pool_sizes.data();
+  auto desc_pool = dev.createDescriptorPool(pool_ci);
+
+  // --- Create compute pipelines ---
+
+  // 1. Equirect to cubemap: sampler2D + imageCube
+  auto equirect_pipeline = create_compute_pipeline(dev, SHADER_DIR "equirect_to_cubemap.spv",
+    {
+      { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eCompute },
+      { 1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute }
+    },
+    8); // face(4) + resolution(4)
+
+  // 2. Irradiance: samplerCube + imageCube
+  auto irradiance_pipeline = create_compute_pipeline(dev, SHADER_DIR "irradiance.spv",
+    {
+      { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eCompute },
+      { 1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute }
+    },
+    16); // face(4) + resolution(4) + sampleCount(4) + envResolution(4)
+
+  // 3. Prefilter: samplerCube + imageCube
+  auto prefilter_pipeline = create_compute_pipeline(dev, SHADER_DIR "prefilter_env.spv",
+    {
+      { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eCompute },
+      { 1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute }
+    },
+    20); // face(4) + resolution(4) + roughness(4) + sampleCount(4) + envResolution(4)
+
+  // 4. BRDF LUT: image2D only
+  auto brdf_pipeline = create_compute_pipeline(dev, SHADER_DIR "brdf_lut.spv",
+    {
+      { 0, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute }
+    },
+    8); // resolution(4) + sampleCount(4)
+
+  // --- Allocate descriptor sets ---
+  // 3 base sets + per-mip prefilter sets
+  std::vector<vk::DescriptorSetLayout> layouts;
+  layouts.push_back(equirect_pipeline.desc_layout);   // [0] equirect
+  layouts.push_back(irradiance_pipeline.desc_layout);  // [1] irradiance
+  layouts.push_back(brdf_pipeline.desc_layout);        // [2] brdf
+  for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
+    layouts.push_back(prefilter_pipeline.desc_layout); // [3..] prefilter per-mip
+
+  vk::DescriptorSetAllocateInfo ds_alloc{};
+  ds_alloc.descriptorPool = desc_pool;
+  ds_alloc.descriptorSetCount = static_cast<uint32_t>(layouts.size());
+  ds_alloc.pSetLayouts = layouts.data();
+  auto desc_sets = dev.allocateDescriptorSets(ds_alloc);
+  // desc_sets[0] = equirect, [1] = irradiance, [2] = brdf, [3+mip-1] = prefilter mip
+
+  // We need per-mip image views for the prefiltered cubemap storage writes
+  // For equirect_to_cubemap, we write to mip 0 of the prefiltered cubemap
+  // For prefilter_env, we need a separate view per mip level
+
+  // Create mip 0 storage view for cubemap (equirect writes here)
+  vk::ImageViewCreateInfo mip0_view_ci{};
+  mip0_view_ci.image = m_prefiltered_image;
+  mip0_view_ci.viewType = vk::ImageViewType::eCube;
+  mip0_view_ci.format = vk::Format::eR32G32B32A32Sfloat;
+  mip0_view_ci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  mip0_view_ci.subresourceRange.baseMipLevel = 0;
+  mip0_view_ci.subresourceRange.levelCount = 1;
+  mip0_view_ci.subresourceRange.baseArrayLayer = 0;
+  mip0_view_ci.subresourceRange.layerCount = 6;
+  vk::ImageView cubemap_mip0_view{};
+  m_device.create_image_view(mip0_view_ci, &cubemap_mip0_view, "Cubemap mip 0 storage view");
+
+  // Per-mip views for prefilter (mip 1+)
+  std::vector<vk::ImageView> prefilter_mip_views(m_mip_levels);
+  for (uint32_t mip = 0; mip < m_mip_levels; ++mip)
+  {
+    vk::ImageViewCreateInfo vi{};
+    vi.image = m_prefiltered_image;
+    vi.viewType = vk::ImageViewType::eCube;
+    vi.format = vk::Format::eR32G32B32A32Sfloat;
+    vi.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    vi.subresourceRange.baseMipLevel = mip;
+    vi.subresourceRange.levelCount = 1;
+    vi.subresourceRange.baseArrayLayer = 0;
+    vi.subresourceRange.layerCount = 6;
+    m_device.create_image_view(vi, &prefilter_mip_views[mip],
+      "Prefilter mip " + std::to_string(mip) + " view");
+  }
+
+  // --- Write descriptor sets ---
+
+  // DS 0: equirect_to_cubemap (HDR sampler + cubemap mip 0 storage)
+  {
+    vk::DescriptorImageInfo hdr_info{};
+    hdr_info.sampler = m_hdr_sampler;
+    hdr_info.imageView = m_hdr_view;
+    hdr_info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    vk::DescriptorImageInfo cubemap_info{};
+    cubemap_info.imageView = cubemap_mip0_view;
+    cubemap_info.imageLayout = vk::ImageLayout::eGeneral;
+
+    std::array<vk::WriteDescriptorSet, 2> writes{};
+    writes[0].dstSet = desc_sets[0];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    writes[0].pImageInfo = &hdr_info;
+
+    writes[1].dstSet = desc_sets[0];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = vk::DescriptorType::eStorageImage;
+    writes[1].pImageInfo = &cubemap_info;
+
+    dev.updateDescriptorSets(writes, {});
+  }
+
+  // DS 1: irradiance (cubemap sampler + irradiance storage)
+  {
+    vk::DescriptorImageInfo env_info{};
+    env_info.sampler = m_prefiltered_sampler;
+    env_info.imageView = m_prefiltered_view;
+    env_info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    vk::DescriptorImageInfo irr_info{};
+    irr_info.imageView = m_irradiance_view;
+    irr_info.imageLayout = vk::ImageLayout::eGeneral;
+
+    std::array<vk::WriteDescriptorSet, 2> writes{};
+    writes[0].dstSet = desc_sets[1];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    writes[0].pImageInfo = &env_info;
+
+    writes[1].dstSet = desc_sets[1];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = vk::DescriptorType::eStorageImage;
+    writes[1].pImageInfo = &irr_info;
+
+    dev.updateDescriptorSets(writes, {});
+  }
+
+  // DS 2: BRDF LUT (storage only)
+  {
+    vk::DescriptorImageInfo lut_info{};
+    lut_info.imageView = m_brdf_lut_view;
+    lut_info.imageLayout = vk::ImageLayout::eGeneral;
+
+    vk::WriteDescriptorSet write{};
+    write.dstSet = desc_sets[2];
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eStorageImage;
+    write.pImageInfo = &lut_info;
+
+    dev.updateDescriptorSets(write, {});
+  }
+
+  // DS 3+: Prefilter per-mip (cubemap sampler + per-mip storage view)
+  for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
+  {
+    uint32_t ds_idx = 3 + (mip - 1); // desc_sets[3] = mip 1, [4] = mip 2, etc.
+
+    vk::DescriptorImageInfo env_info{};
+    env_info.sampler = m_prefiltered_sampler;
+    env_info.imageView = m_prefiltered_view;
+    env_info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    vk::DescriptorImageInfo storage_info{};
+    storage_info.imageView = prefilter_mip_views[mip];
+    storage_info.imageLayout = vk::ImageLayout::eGeneral;
+
+    std::array<vk::WriteDescriptorSet, 2> writes{};
+    writes[0].dstSet = desc_sets[ds_idx];
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    writes[0].pImageInfo = &env_info;
+
+    writes[1].dstSet = desc_sets[ds_idx];
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = vk::DescriptorType::eStorageImage;
+    writes[1].pImageInfo = &storage_info;
+
+    dev.updateDescriptorSets(writes, {});
+  }
+
+  // --- Record compute command buffer ---
+  vk::CommandPoolCreateInfo cmd_pool_ci{};
+  cmd_pool_ci.queueFamilyIndex = m_device.m_graphics_queue_family_index;
+  cmd_pool_ci.flags = vk::CommandPoolCreateFlagBits::eTransient;
+  vk::CommandPool cmd_pool = dev.createCommandPool(cmd_pool_ci);
+
+  auto cmd = begin_single_time_commands(m_device, cmd_pool);
+
+  // ========= Stage 1: Equirect -> Cubemap mip 0 =========
+  transition_image_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, m_mip_levels, 6,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eComputeShader,
+    {}, vk::AccessFlagBits::eShaderWrite);
+
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, equirect_pipeline.pipeline);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, equirect_pipeline.layout,
+    0, desc_sets[0], {});
+
+  struct EquirectPC { uint32_t face; uint32_t resolution; };
+  for (uint32_t face = 0; face < 6; ++face)
+  {
+    EquirectPC pc{ face, m_resolution };
+    cmd.pushConstants(equirect_pipeline.layout, vk::ShaderStageFlagBits::eCompute,
+      0, sizeof(pc), &pc);
+    cmd.dispatch((m_resolution + 7) / 8, (m_resolution + 7) / 8, 1);
+  }
+
+  // ========= Stage 2: Generate cubemap mip chain via blit =========
+  // Transition mip 0 to transfer src
+  transition_mip_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferSrcOptimal, 0, 6,
+    vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,
+    vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead);
+
+  for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
+  {
+    // Transition this mip to transfer dst
+    transition_mip_layout(cmd, m_prefiltered_image,
+      vk::ImageLayout::eGeneral, vk::ImageLayout::eTransferDstOptimal, mip, 6,
+      vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
+      {}, vk::AccessFlagBits::eTransferWrite);
+
+    uint32_t src_size = std::max(1u, m_resolution >> (mip - 1));
+    uint32_t dst_size = std::max(1u, m_resolution >> mip);
+
+    vk::ImageBlit blit{};
+    blit.srcSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+    blit.srcSubresource.mipLevel = mip - 1;
+    blit.srcSubresource.baseArrayLayer = 0;
+    blit.srcSubresource.layerCount = 6;
+    blit.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+    blit.srcOffsets[1] = vk::Offset3D{
+      static_cast<int32_t>(src_size), static_cast<int32_t>(src_size), 1 };
+
+    blit.dstSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
+    blit.dstSubresource.mipLevel = mip;
+    blit.dstSubresource.baseArrayLayer = 0;
+    blit.dstSubresource.layerCount = 6;
+    blit.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
+    blit.dstOffsets[1] = vk::Offset3D{
+      static_cast<int32_t>(dst_size), static_cast<int32_t>(dst_size), 1 };
+
+    cmd.blitImage(m_prefiltered_image, vk::ImageLayout::eTransferSrcOptimal,
+      m_prefiltered_image, vk::ImageLayout::eTransferDstOptimal,
+      blit, vk::Filter::eLinear);
+
+    // Transition this mip to transfer src (for next mip's blit)
+    transition_mip_layout(cmd, m_prefiltered_image,
+      vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal, mip, 6,
+      vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer,
+      vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferRead);
+  }
+
+  // Transition all mips to shader read for irradiance/prefilter sampling
+  transition_image_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+    m_mip_levels, 6,
+    vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+    vk::AccessFlagBits::eTransferRead, vk::AccessFlagBits::eShaderRead);
+
+  // ========= Stage 3: Irradiance convolution =========
+  transition_image_layout(cmd, m_irradiance_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1, 6,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eComputeShader,
+    {}, vk::AccessFlagBits::eShaderWrite);
+
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, irradiance_pipeline.pipeline);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, irradiance_pipeline.layout,
+    0, desc_sets[1], {});
+
+  struct IrradiancePC { uint32_t face; uint32_t resolution; uint32_t sampleCount; uint32_t envResolution; };
+  for (uint32_t face = 0; face < 6; ++face)
+  {
+    IrradiancePC pc{ face, IRR_SIZE, IRR_SAMPLES, m_resolution };
+    cmd.pushConstants(irradiance_pipeline.layout, vk::ShaderStageFlagBits::eCompute,
+      0, sizeof(pc), &pc);
+    cmd.dispatch((IRR_SIZE + 7) / 8, (IRR_SIZE + 7) / 8, 1);
+  }
+
+  // Transition irradiance to shader read
+  transition_image_layout(cmd, m_irradiance_image,
+    vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, 1, 6,
+    vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eFragmentShader,
+    vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+
+  // ========= Stage 4: Prefiltered GGX (per mip level, skip mip 0 = raw copy) =========
+  // Mip 0 stays in ShaderReadOnly (it's our source via the sampler)
+  // Per-mip descriptor sets were pre-allocated above (desc_sets[3+mip-1])
+
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, prefilter_pipeline.pipeline);
+
+  for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
+  {
+    float roughness = std::min(1.0f, static_cast<float>(mip) / MAX_REFLECTION_LOD);
+    uint32_t mip_size = std::max(1u, m_resolution >> mip);
+    uint32_t ds_idx = 3 + (mip - 1);
+
+    // Transition this mip to General for writes
+    transition_mip_layout(cmd, m_prefiltered_image,
+      vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eGeneral, mip, 6,
+      vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+      vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eShaderWrite);
+
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, prefilter_pipeline.layout,
+      0, desc_sets[ds_idx], {});
+
+    struct PrefilterPC {
+      uint32_t face; uint32_t resolution; float roughness;
+      uint32_t sampleCount; uint32_t envResolution;
+    };
+    for (uint32_t face = 0; face < 6; ++face)
+    {
+      PrefilterPC pc{ face, mip_size, roughness, PREFILTER_SAMPLES, m_resolution };
+      cmd.pushConstants(prefilter_pipeline.layout, vk::ShaderStageFlagBits::eCompute,
+        0, sizeof(pc), &pc);
+      cmd.dispatch((mip_size + 7) / 8, (mip_size + 7) / 8, 1);
+    }
+
+    // Transition back to shader read
+    transition_mip_layout(cmd, m_prefiltered_image,
+      vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, mip, 6,
+      vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+      vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+  }
+
+  // ========= Stage 5: BRDF LUT =========
+  transition_image_layout(cmd, m_brdf_lut_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1, 1,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eComputeShader,
+    {}, vk::AccessFlagBits::eShaderWrite);
+
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, brdf_pipeline.pipeline);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, brdf_pipeline.layout,
+    0, desc_sets[2], {});
+
+  struct BrdfPC { uint32_t resolution; uint32_t sampleCount; };
+  BrdfPC brdf_pc{ LUT_SIZE, BRDF_SAMPLES };
+  cmd.pushConstants(brdf_pipeline.layout, vk::ShaderStageFlagBits::eCompute,
+    0, sizeof(brdf_pc), &brdf_pc);
+  cmd.dispatch((LUT_SIZE + 7) / 8, (LUT_SIZE + 7) / 8, 1);
+
+  // Transition BRDF LUT to shader read
+  transition_image_layout(cmd, m_brdf_lut_image,
+    vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, 1, 1,
+    vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eFragmentShader,
+    vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+
+  // ========= Submit =========
+  end_single_time_commands(m_device, cmd_pool, cmd);
+
+  spdlog::info("GPU IBL generation complete");
+
+  // --- Cleanup compute resources ---
+  dev.destroyCommandPool(cmd_pool);
+
+  dev.destroyImageView(cubemap_mip0_view);
+  for (auto& view : prefilter_mip_views)
+    dev.destroyImageView(view);
+
+  dev.destroyDescriptorPool(desc_pool);
+
+  destroy_compute_pipeline(dev, equirect_pipeline);
+  destroy_compute_pipeline(dev, irradiance_pipeline);
+  destroy_compute_pipeline(dev, prefilter_pipeline);
+  destroy_compute_pipeline(dev, brdf_pipeline);
+}
+
 void IBL::create_default_environment()
 {
   // Create minimal irradiance and prefiltered maps with neutral gray
   auto dev = m_device.device();
 
-  // Small gray cubemap (32x32 per face)
   constexpr uint32_t CUBE_SIZE = 32;
 
   vk::ImageCreateInfo image_info{};
@@ -391,7 +869,7 @@ void IBL::create_default_environment()
   image_info.format = vk::Format::eR8G8B8A8Unorm;
   image_info.extent = vk::Extent3D{ CUBE_SIZE, CUBE_SIZE, 1 };
   image_info.mipLevels = 1;
-  image_info.arrayLayers = 6; // Cubemap
+  image_info.arrayLayers = 6;
   image_info.samples = vk::SampleCountFlagBits::e1;
   image_info.tiling = vk::ImageTiling::eOptimal;
   image_info.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
@@ -425,10 +903,10 @@ void IBL::create_default_environment()
   std::vector<uint8_t> gray_data(CUBE_SIZE * CUBE_SIZE * 4 * 6);
   for (size_t i = 0; i < gray_data.size(); i += 4)
   {
-    gray_data[i + 0] = 128; // R
-    gray_data[i + 1] = 128; // G
-    gray_data[i + 2] = 128; // B
-    gray_data[i + 3] = 255; // A
+    gray_data[i + 0] = 128;
+    gray_data[i + 1] = 128;
+    gray_data[i + 2] = 128;
+    gray_data[i + 3] = 255;
   }
 
   Buffer staging(m_device, "Cubemap staging", gray_data.size(),
@@ -436,7 +914,6 @@ void IBL::create_default_environment()
     vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
   staging.update(gray_data.data(), gray_data.size());
 
-  // Setup copy regions for 6 faces
   std::vector<vk::BufferImageCopy> regions(6);
   for (uint32_t face = 0; face < 6; ++face)
   {
@@ -448,28 +925,33 @@ void IBL::create_default_environment()
     regions[face].imageExtent = vk::Extent3D{ CUBE_SIZE, CUBE_SIZE, 1 };
   }
 
-  // Single command buffer for all uploads
   vk::CommandPoolCreateInfo pool_info{};
   pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
   pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
   vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
   auto cmd = begin_single_time_commands(m_device, cmd_pool);
 
-  // Upload irradiance cubemap
-  transition_image_layout(cmd, m_irradiance_image, vk::ImageLayout::eUndefined,
-    vk::ImageLayout::eTransferDstOptimal, 1, 6);
+  transition_image_layout(cmd, m_irradiance_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1, 6,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
+    {}, vk::AccessFlagBits::eTransferWrite);
   cmd.copyBufferToImage(staging.buffer(), m_irradiance_image,
     vk::ImageLayout::eTransferDstOptimal, regions);
-  transition_image_layout(cmd, m_irradiance_image, vk::ImageLayout::eTransferDstOptimal,
-    vk::ImageLayout::eShaderReadOnlyOptimal, 1, 6);
+  transition_image_layout(cmd, m_irradiance_image,
+    vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 1, 6,
+    vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader,
+    vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
 
-  // Upload prefiltered cubemap
-  transition_image_layout(cmd, m_prefiltered_image, vk::ImageLayout::eUndefined,
-    vk::ImageLayout::eTransferDstOptimal, 1, 6);
+  transition_image_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, 1, 6,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
+    {}, vk::AccessFlagBits::eTransferWrite);
   cmd.copyBufferToImage(staging.buffer(), m_prefiltered_image,
     vk::ImageLayout::eTransferDstOptimal, regions);
-  transition_image_layout(cmd, m_prefiltered_image, vk::ImageLayout::eTransferDstOptimal,
-    vk::ImageLayout::eShaderReadOnlyOptimal, 1, 6);
+  transition_image_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal, 1, 6,
+    vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eFragmentShader,
+    vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
 
   end_single_time_commands(m_device, cmd_pool, cmd);
   dev.destroyCommandPool(cmd_pool);
@@ -502,545 +984,89 @@ void IBL::create_default_environment()
   m_irradiance_sampler = dev.createSampler(sampler_info);
   m_prefiltered_sampler = dev.createSampler(sampler_info);
 
-  spdlog::trace("Default IBL environment created");
-}
+  // Also create BRDF LUT for default environment
+  constexpr uint32_t LUT_SIZE = 128;
+
+  create_image(m_device, m_brdf_lut_image, m_brdf_lut_memory,
+    LUT_SIZE, LUT_SIZE, 1, 1,
+    vk::Format::eR8G8B8A8Unorm,
+    vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
+
+  vk::ImageViewCreateInfo lut_view_info{};
+  lut_view_info.image = m_brdf_lut_image;
+  lut_view_info.viewType = vk::ImageViewType::e2D;
+  lut_view_info.format = vk::Format::eR8G8B8A8Unorm;
+  lut_view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  lut_view_info.subresourceRange.baseMipLevel = 0;
+  lut_view_info.subresourceRange.levelCount = 1;
+  lut_view_info.subresourceRange.baseArrayLayer = 0;
+  lut_view_info.subresourceRange.layerCount = 1;
+  m_device.create_image_view(lut_view_info, &m_brdf_lut_view, "BRDF LUT view");
 
-namespace
-{
-// Sample equirectangular map at direction
-inline void sample_equirect(const std::vector<float>& hdr, uint32_t w, uint32_t h,
-                            float dx, float dy, float dz, float& r, float& g, float& b)
-{
-  // Normalize direction
-  float len = std::sqrt(dx * dx + dy * dy + dz * dz);
-  dx /= len; dy /= len; dz /= len;
-
-  // Convert to spherical coordinates
-  float theta = std::atan2(dz, dx);  // [-PI, PI]
-  float phi = std::asin(dy);          // [-PI/2, PI/2]
-
-  // Convert to UV
-  float u = (theta + 3.14159265359f) / (2.0f * 3.14159265359f);
-  float v = (phi + 3.14159265359f / 2.0f) / 3.14159265359f;
-
-  // Sample with bilinear filtering
-  float fx = u * (w - 1);
-  float fy = (1.0f - v) * (h - 1);  // Flip V for top-down
-  int x0 = static_cast<int>(fx);
-  int y0 = static_cast<int>(fy);
-  int x1 = std::min(x0 + 1, static_cast<int>(w - 1));
-  int y1 = std::min(y0 + 1, static_cast<int>(h - 1));
-  float tx = fx - x0;
-  float ty = fy - y0;
-
-  auto sample = [&](int x, int y) -> std::array<float, 3> {
-    size_t idx = (y * w + x) * 4;
-    return { hdr[idx], hdr[idx + 1], hdr[idx + 2] };
-  };
-
-  auto c00 = sample(x0, y0);
-  auto c10 = sample(x1, y0);
-  auto c01 = sample(x0, y1);
-  auto c11 = sample(x1, y1);
-
-  r = (c00[0] * (1 - tx) + c10[0] * tx) * (1 - ty) + (c01[0] * (1 - tx) + c11[0] * tx) * ty;
-  g = (c00[1] * (1 - tx) + c10[1] * tx) * (1 - ty) + (c01[1] * (1 - tx) + c11[1] * tx) * ty;
-  b = (c00[2] * (1 - tx) + c10[2] * tx) * (1 - ty) + (c01[2] * (1 - tx) + c11[2] * tx) * ty;
-}
-
-// Get direction for cubemap face and UV
-inline void get_cube_direction(int face, float u, float v, float& dx, float& dy, float& dz)
-{
-  // Map UV from [0,1] to [-1,1]
-  float uc = 2.0f * u - 1.0f;
-  float vc = 2.0f * v - 1.0f;
-
-  switch (face)
-  {
-    case 0: dx =  1; dy = -vc; dz = -uc; break;  // +X
-    case 1: dx = -1; dy = -vc; dz =  uc; break;  // -X
-    case 2: dx =  uc; dy =  1; dz =  vc; break;  // +Y
-    case 3: dx =  uc; dy = -1; dz = -vc; break;  // -Y
-    case 4: dx =  uc; dy = -vc; dz =  1; break;  // +Z
-    case 5: dx = -uc; dy = -vc; dz = -1; break;  // -Z
-  }
-}
-} // namespace
-
-void IBL::create_cubemap_from_equirectangular()
-{
-  if (m_hdr_data.empty())
-  {
-    spdlog::warn("No HDR data loaded - using default environment");
-    create_default_environment();
-    return;
-  }
-
-  spdlog::info("Converting equirectangular HDR to cubemap ({}x{})", m_resolution, m_resolution);
-
-  auto dev = m_device.device();
-  const uint32_t CUBE_SIZE = m_resolution;
-
-  // Generate cubemap data on CPU
-  std::vector<float> cube_data(CUBE_SIZE * CUBE_SIZE * 4 * 6);
-
-  for (int face = 0; face < 6; ++face)
-  {
-    for (uint32_t y = 0; y < CUBE_SIZE; ++y)
-    {
-      for (uint32_t x = 0; x < CUBE_SIZE; ++x)
-      {
-        float u = (x + 0.5f) / CUBE_SIZE;
-        float v = (y + 0.5f) / CUBE_SIZE;
-
-        float dx, dy, dz;
-        get_cube_direction(face, u, v, dx, dy, dz);
-
-        float r, g, b;
-        sample_equirect(m_hdr_data, m_hdr_width, m_hdr_height, dx, dy, dz, r, g, b);
-
-        size_t idx = (face * CUBE_SIZE * CUBE_SIZE + y * CUBE_SIZE + x) * 4;
-        cube_data[idx + 0] = r;
-        cube_data[idx + 1] = g;
-        cube_data[idx + 2] = b;
-        cube_data[idx + 3] = 1.0f;
-      }
-    }
-  }
-
-  // Create prefiltered cubemap image (we'll use this as our environment)
-  vk::ImageCreateInfo image_info{};
-  image_info.imageType = vk::ImageType::e2D;
-  image_info.format = vk::Format::eR32G32B32A32Sfloat;
-  image_info.extent = vk::Extent3D{ CUBE_SIZE, CUBE_SIZE, 1 };
-  image_info.mipLevels = m_mip_levels;
-  image_info.arrayLayers = 6;
-  image_info.samples = vk::SampleCountFlagBits::e1;
-  image_info.tiling = vk::ImageTiling::eOptimal;
-  image_info.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
-  image_info.sharingMode = vk::SharingMode::eExclusive;
-  image_info.initialLayout = vk::ImageLayout::eUndefined;
-  image_info.flags = vk::ImageCreateFlagBits::eCubeCompatible;
-
-  m_prefiltered_image = dev.createImage(image_info);
-
-  auto mem_reqs = dev.getImageMemoryRequirements(m_prefiltered_image);
-  vk::MemoryAllocateInfo alloc_info{};
-  alloc_info.allocationSize = mem_reqs.size;
-  alloc_info.memoryTypeIndex =
-    m_device.find_memory_type(mem_reqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_prefiltered_memory = dev.allocateMemory(alloc_info);
-  dev.bindImageMemory(m_prefiltered_image, m_prefiltered_memory, 0);
-
-  // Upload mip level 0
-  vk::DeviceSize data_size = CUBE_SIZE * CUBE_SIZE * 4 * 6 * sizeof(float);
-  Buffer staging(m_device, "Cubemap staging", data_size, vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-  staging.update(cube_data.data(), data_size);
-
-  vk::CommandPoolCreateInfo pool_info{};
-  pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
-  pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
-  vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
-
-  auto cmd = begin_single_time_commands(m_device, cmd_pool);
-
-  transition_image_layout(cmd, m_prefiltered_image, vk::ImageLayout::eUndefined,
-    vk::ImageLayout::eTransferDstOptimal, m_mip_levels, 6);
-
-  std::vector<vk::BufferImageCopy> regions(6);
-  for (uint32_t face = 0; face < 6; ++face)
-  {
-    regions[face].bufferOffset = face * CUBE_SIZE * CUBE_SIZE * 4 * sizeof(float);
-    regions[face].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    regions[face].imageSubresource.mipLevel = 0;
-    regions[face].imageSubresource.baseArrayLayer = face;
-    regions[face].imageSubresource.layerCount = 1;
-    regions[face].imageExtent = vk::Extent3D{ CUBE_SIZE, CUBE_SIZE, 1 };
-  }
-  cmd.copyBufferToImage(staging.buffer(), m_prefiltered_image,
-    vk::ImageLayout::eTransferDstOptimal, regions);
-
-  // Leave in TransferDstOptimal — generate_prefiltered_map() will upload remaining
-  // mip levels and do the final transition to ShaderReadOnlyOptimal
-
-  end_single_time_commands(m_device, cmd_pool, cmd);
-  dev.destroyCommandPool(cmd_pool);
-
-  // Create cubemap view
-  vk::ImageViewCreateInfo view_info{};
-  view_info.image = m_prefiltered_image;
-  view_info.viewType = vk::ImageViewType::eCube;
-  view_info.format = vk::Format::eR32G32B32A32Sfloat;
-  view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  view_info.subresourceRange.baseMipLevel = 0;
-  view_info.subresourceRange.levelCount = m_mip_levels;
-  view_info.subresourceRange.baseArrayLayer = 0;
-  view_info.subresourceRange.layerCount = 6;
-
-  m_device.create_image_view(view_info, &m_prefiltered_view, "Prefiltered cubemap view");
-
-  // Create sampler with trilinear filtering for mip levels
-  vk::SamplerCreateInfo sampler_info{};
-  sampler_info.magFilter = vk::Filter::eLinear;
-  sampler_info.minFilter = vk::Filter::eLinear;
-  sampler_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
-  sampler_info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.maxLod = static_cast<float>(m_mip_levels);
-
-  m_prefiltered_sampler = dev.createSampler(sampler_info);
-
-  spdlog::info("Created prefiltered cubemap ({}x{}, {} mips)", CUBE_SIZE, CUBE_SIZE, m_mip_levels);
-}
-
-void IBL::generate_irradiance_map()
-{
-  if (m_hdr_data.empty())
-  {
-    spdlog::warn("No HDR data - skipping irradiance map generation");
-    return;
-  }
-
-  spdlog::info("Generating irradiance map...");
-
-  auto dev = m_device.device();
-  constexpr uint32_t IRR_SIZE = 32;  // Irradiance can be low resolution
-  constexpr float PI = 3.14159265359f;
-
-  // Generate irradiance cubemap on CPU by convolving the environment
-  std::vector<float> irr_data(IRR_SIZE * IRR_SIZE * 4 * 6, 0.0f);
-
-  constexpr int SAMPLE_COUNT = 64;  // Samples per hemisphere
-
-  for (int face = 0; face < 6; ++face)
-  {
-    for (uint32_t y = 0; y < IRR_SIZE; ++y)
-    {
-      for (uint32_t x = 0; x < IRR_SIZE; ++x)
-      {
-        float u = (x + 0.5f) / IRR_SIZE;
-        float v = (y + 0.5f) / IRR_SIZE;
-
-        float nx, ny, nz;
-        get_cube_direction(face, u, v, nx, ny, nz);
-        float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-        nx /= len; ny /= len; nz /= len;
-
-        // Build tangent space
-        float upx = std::abs(ny) < 0.999f ? 0.0f : 1.0f;
-        float upy = std::abs(ny) < 0.999f ? 1.0f : 0.0f;
-        float upz = 0.0f;
-        float tx = upy * nz - upz * ny;
-        float ty = upz * nx - upx * nz;
-        float tz = upx * ny - upy * nx;
-        len = std::sqrt(tx * tx + ty * ty + tz * tz);
-        tx /= len; ty /= len; tz /= len;
-        float bx = ny * tz - nz * ty;
-        float by = nz * tx - nx * tz;
-        float bz = nx * ty - ny * tx;
-
-        float ir = 0, ig = 0, ib = 0;
-
-        // Uniform hemisphere sampling
-        for (int i = 0; i < SAMPLE_COUNT; ++i)
-        {
-          float xi1 = static_cast<float>(i) / SAMPLE_COUNT;
-          float xi2 = static_cast<float>((i * 7) % SAMPLE_COUNT) / SAMPLE_COUNT;
-
-          float phi = 2.0f * PI * xi1;
-          float cos_theta = std::sqrt(1.0f - xi2);  // Cosine-weighted
-          float sin_theta = std::sqrt(xi2);
-
-          // Tangent space direction
-          float hx = std::cos(phi) * sin_theta;
-          float hy = cos_theta;
-          float hz = std::sin(phi) * sin_theta;
-
-          // Transform to world space
-          float dx = hx * tx + hy * nx + hz * bx;
-          float dy = hx * ty + hy * ny + hz * by;
-          float dz = hx * tz + hy * nz + hz * bz;
-
-          float sr, sg, sb;
-          sample_equirect(m_hdr_data, m_hdr_width, m_hdr_height, dx, dy, dz, sr, sg, sb);
-
-          ir += sr;
-          ig += sg;
-          ib += sb;
-        }
-
-        ir = ir / SAMPLE_COUNT * PI;
-        ig = ig / SAMPLE_COUNT * PI;
-        ib = ib / SAMPLE_COUNT * PI;
-
-        size_t idx = (face * IRR_SIZE * IRR_SIZE + y * IRR_SIZE + x) * 4;
-        irr_data[idx + 0] = ir;
-        irr_data[idx + 1] = ig;
-        irr_data[idx + 2] = ib;
-        irr_data[idx + 3] = 1.0f;
-      }
-    }
-  }
-
-  // Create irradiance cubemap
-  vk::ImageCreateInfo image_info{};
-  image_info.imageType = vk::ImageType::e2D;
-  image_info.format = vk::Format::eR32G32B32A32Sfloat;
-  image_info.extent = vk::Extent3D{ IRR_SIZE, IRR_SIZE, 1 };
-  image_info.mipLevels = 1;
-  image_info.arrayLayers = 6;
-  image_info.samples = vk::SampleCountFlagBits::e1;
-  image_info.tiling = vk::ImageTiling::eOptimal;
-  image_info.usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
-  image_info.sharingMode = vk::SharingMode::eExclusive;
-  image_info.initialLayout = vk::ImageLayout::eUndefined;
-  image_info.flags = vk::ImageCreateFlagBits::eCubeCompatible;
-
-  m_irradiance_image = dev.createImage(image_info);
-
-  auto mem_reqs = dev.getImageMemoryRequirements(m_irradiance_image);
-  vk::MemoryAllocateInfo alloc_info{};
-  alloc_info.allocationSize = mem_reqs.size;
-  alloc_info.memoryTypeIndex =
-    m_device.find_memory_type(mem_reqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_irradiance_memory = dev.allocateMemory(alloc_info);
-  dev.bindImageMemory(m_irradiance_image, m_irradiance_memory, 0);
-
-  // Upload
-  vk::DeviceSize data_size = IRR_SIZE * IRR_SIZE * 4 * 6 * sizeof(float);
-  Buffer staging(m_device, "Irradiance staging", data_size, vk::BufferUsageFlagBits::eTransferSrc,
-    vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-  staging.update(irr_data.data(), data_size);
-
-  vk::CommandPoolCreateInfo pool_info{};
-  pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
-  pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
-  vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
-
-  auto cmd = begin_single_time_commands(m_device, cmd_pool);
-
-  transition_image_layout(cmd, m_irradiance_image, vk::ImageLayout::eUndefined,
-    vk::ImageLayout::eTransferDstOptimal, 1, 6);
-
-  std::vector<vk::BufferImageCopy> regions(6);
-  for (uint32_t face = 0; face < 6; ++face)
-  {
-    regions[face].bufferOffset = face * IRR_SIZE * IRR_SIZE * 4 * sizeof(float);
-    regions[face].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-    regions[face].imageSubresource.mipLevel = 0;
-    regions[face].imageSubresource.baseArrayLayer = face;
-    regions[face].imageSubresource.layerCount = 1;
-    regions[face].imageExtent = vk::Extent3D{ IRR_SIZE, IRR_SIZE, 1 };
-  }
-  cmd.copyBufferToImage(staging.buffer(), m_irradiance_image,
-    vk::ImageLayout::eTransferDstOptimal, regions);
-
-  transition_image_layout(cmd, m_irradiance_image, vk::ImageLayout::eTransferDstOptimal,
-    vk::ImageLayout::eShaderReadOnlyOptimal, 1, 6);
-
-  end_single_time_commands(m_device, cmd_pool, cmd);
-  dev.destroyCommandPool(cmd_pool);
-
-  // Create view and sampler
-  vk::ImageViewCreateInfo view_info{};
-  view_info.image = m_irradiance_image;
-  view_info.viewType = vk::ImageViewType::eCube;
-  view_info.format = vk::Format::eR32G32B32A32Sfloat;
-  view_info.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  view_info.subresourceRange.baseMipLevel = 0;
-  view_info.subresourceRange.levelCount = 1;
-  view_info.subresourceRange.baseArrayLayer = 0;
-  view_info.subresourceRange.layerCount = 6;
-
-  m_device.create_image_view(view_info, &m_irradiance_view, "Irradiance cubemap view");
-
-  vk::SamplerCreateInfo sampler_info{};
-  sampler_info.magFilter = vk::Filter::eLinear;
-  sampler_info.minFilter = vk::Filter::eLinear;
-  sampler_info.mipmapMode = vk::SamplerMipmapMode::eLinear;
-  sampler_info.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-  sampler_info.addressModeW = vk::SamplerAddressMode::eClampToEdge;
   sampler_info.maxLod = 1.0f;
+  m_brdf_lut_sampler = dev.createSampler(sampler_info);
 
-  m_irradiance_sampler = dev.createSampler(sampler_info);
+  // Generate BRDF LUT via compute shader
+  auto brdf_pipeline = create_compute_pipeline(dev, SHADER_DIR "brdf_lut.spv",
+    { { 0, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute } },
+    8);
 
-  spdlog::info("Created irradiance cubemap ({}x{})", IRR_SIZE, IRR_SIZE);
-}
-
-void IBL::generate_prefiltered_map()
-{
-  if (m_hdr_data.empty())
-    return; // Default environment already fully initialized
-
-  auto dev = m_device.device();
-  constexpr float PI = 3.14159265359f;
-  constexpr uint32_t SAMPLE_COUNT = 256;
-  constexpr float MAX_REFLECTION_LOD = 4.0f; // Must match shader
-
-  // Hammersley sequence for quasi-random sampling
-  auto radical_inverse_vdc = [](uint32_t bits) -> float {
-    bits = (bits << 16u) | (bits >> 16u);
-    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
-    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
-    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
-    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
-    return static_cast<float>(bits) * 2.3283064365386963e-10f;
+  std::array<vk::DescriptorPoolSize, 1> pool_sizes = {
+    vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, 1 }
   };
+  vk::DescriptorPoolCreateInfo dpool_ci{};
+  dpool_ci.maxSets = 1;
+  dpool_ci.poolSizeCount = 1;
+  dpool_ci.pPoolSizes = pool_sizes.data();
+  auto desc_pool = dev.createDescriptorPool(dpool_ci);
 
-  auto hammersley = [&](uint32_t i, uint32_t n) -> std::pair<float, float> {
-    return { static_cast<float>(i) / static_cast<float>(n), radical_inverse_vdc(i) };
-  };
+  vk::DescriptorSetAllocateInfo ds_alloc{};
+  ds_alloc.descriptorPool = desc_pool;
+  ds_alloc.descriptorSetCount = 1;
+  ds_alloc.pSetLayouts = &brdf_pipeline.desc_layout;
+  auto ds = dev.allocateDescriptorSets(ds_alloc)[0];
 
-  spdlog::info("Generating prefiltered environment mip levels...");
+  vk::DescriptorImageInfo lut_info{};
+  lut_info.imageView = m_brdf_lut_view;
+  lut_info.imageLayout = vk::ImageLayout::eGeneral;
 
-  vk::CommandPoolCreateInfo pool_info{};
-  pool_info.queueFamilyIndex = m_device.m_graphics_queue_family_index;
-  pool_info.flags = vk::CommandPoolCreateFlagBits::eTransient;
-  vk::CommandPool cmd_pool = dev.createCommandPool(pool_info);
+  vk::WriteDescriptorSet write{};
+  write.dstSet = ds;
+  write.dstBinding = 0;
+  write.descriptorCount = 1;
+  write.descriptorType = vk::DescriptorType::eStorageImage;
+  write.pImageInfo = &lut_info;
+  dev.updateDescriptorSets(write, {});
 
-  // Generate and upload each mip level (mip 0 already has the raw environment)
-  for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
-  {
-    // Roughness for this mip level (matches shader: LOD = roughness * MAX_REFLECTION_LOD)
-    float roughness = std::min(1.0f, static_cast<float>(mip) / MAX_REFLECTION_LOD);
-    uint32_t mip_size = std::max(1u, m_resolution >> mip);
-    float alpha = roughness * roughness; // GGX alpha = perceptualRoughness^2
+  cmd_pool = dev.createCommandPool(pool_info);
+  cmd = begin_single_time_commands(m_device, cmd_pool);
 
-    spdlog::trace("  Mip {}: {}x{}, roughness={:.3f}", mip, mip_size, mip_size, roughness);
+  transition_image_layout(cmd, m_brdf_lut_image,
+    vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral, 1, 1,
+    vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eComputeShader,
+    {}, vk::AccessFlagBits::eShaderWrite);
 
-    std::vector<float> mip_data(mip_size * mip_size * 4 * 6);
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, brdf_pipeline.pipeline);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, brdf_pipeline.layout, 0, ds, {});
 
-    for (uint32_t face = 0; face < 6; ++face)
-    {
-      for (uint32_t y = 0; y < mip_size; ++y)
-      {
-        for (uint32_t x = 0; x < mip_size; ++x)
-        {
-          float u = (x + 0.5f) / mip_size;
-          float v = (y + 0.5f) / mip_size;
+  struct BrdfPC { uint32_t resolution; uint32_t sampleCount; };
+  BrdfPC brdf_pc{ LUT_SIZE, 256 };
+  cmd.pushConstants(brdf_pipeline.layout, vk::ShaderStageFlagBits::eCompute,
+    0, sizeof(brdf_pc), &brdf_pc);
+  cmd.dispatch((LUT_SIZE + 7) / 8, (LUT_SIZE + 7) / 8, 1);
 
-          // Normal = View = Reflection direction for prefiltering
-          float nx, ny, nz;
-          get_cube_direction(face, u, v, nx, ny, nz);
-          float nlen = std::sqrt(nx * nx + ny * ny + nz * nz);
-          nx /= nlen; ny /= nlen; nz /= nlen;
+  transition_image_layout(cmd, m_brdf_lut_image,
+    vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, 1, 1,
+    vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eFragmentShader,
+    vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 
-          // Build tangent frame from N
-          float upx, upy, upz;
-          if (std::abs(ny) < 0.999f) { upx = 0; upy = 1; upz = 0; }
-          else { upx = 1; upy = 0; upz = 0; }
-
-          // T = normalize(cross(up, N))
-          float tx = upy * nz - upz * ny;
-          float ty = upz * nx - upx * nz;
-          float tz = upx * ny - upy * nx;
-          float tlen = std::sqrt(tx * tx + ty * ty + tz * tz);
-          tx /= tlen; ty /= tlen; tz /= tlen;
-
-          // B = cross(N, T)
-          float bx = ny * tz - nz * ty;
-          float by = nz * tx - nx * tz;
-          float bz = nx * ty - ny * tx;
-
-          float total_r = 0, total_g = 0, total_b = 0;
-          float total_weight = 0;
-
-          for (uint32_t s = 0; s < SAMPLE_COUNT; ++s)
-          {
-            auto xi = hammersley(s, SAMPLE_COUNT);
-
-            // GGX importance sample half-vector in tangent space
-            float phi = 2.0f * PI * xi.first;
-            float cos_theta = std::sqrt(
-              (1.0f - xi.second) / (1.0f + (alpha * alpha - 1.0f) * xi.second));
-            float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
-
-            float hx_t = std::cos(phi) * sin_theta;
-            float hy_t = std::sin(phi) * sin_theta;
-            float hz_t = cos_theta;
-
-            // Transform half-vector to world space: H = hx*T + hy*B + hz*N
-            float hwx = hx_t * tx + hy_t * bx + hz_t * nx;
-            float hwy = hx_t * ty + hy_t * by + hz_t * ny;
-            float hwz = hx_t * tz + hy_t * bz + hz_t * nz;
-
-            // L = reflect(-N, H) = 2*(N·H)*H - N
-            float NdotH = nx * hwx + ny * hwy + nz * hwz;
-            float lx = 2.0f * NdotH * hwx - nx;
-            float ly = 2.0f * NdotH * hwy - ny;
-            float lz = 2.0f * NdotH * hwz - nz;
-
-            float NdotL = nx * lx + ny * ly + nz * lz;
-
-            if (NdotL > 0.0f)
-            {
-              float sr, sg, sb;
-              sample_equirect(m_hdr_data, m_hdr_width, m_hdr_height, lx, ly, lz, sr, sg, sb);
-              total_r += sr * NdotL;
-              total_g += sg * NdotL;
-              total_b += sb * NdotL;
-              total_weight += NdotL;
-            }
-          }
-
-          if (total_weight > 0.0f)
-          {
-            total_r /= total_weight;
-            total_g /= total_weight;
-            total_b /= total_weight;
-          }
-
-          size_t idx = (face * mip_size * mip_size + y * mip_size + x) * 4;
-          mip_data[idx + 0] = total_r;
-          mip_data[idx + 1] = total_g;
-          mip_data[idx + 2] = total_b;
-          mip_data[idx + 3] = 1.0f;
-        }
-      }
-    }
-
-    // Upload this mip level via staging buffer
-    vk::DeviceSize data_size = mip_data.size() * sizeof(float);
-    Buffer staging(m_device, "prefiltered mip " + std::to_string(mip), data_size,
-      vk::BufferUsageFlagBits::eTransferSrc,
-      vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-    staging.update(mip_data.data(), data_size);
-
-    auto cmd = begin_single_time_commands(m_device, cmd_pool);
-
-    std::vector<vk::BufferImageCopy> regions(6);
-    for (uint32_t f = 0; f < 6; ++f)
-    {
-      regions[f].bufferOffset = f * mip_size * mip_size * 4 * sizeof(float);
-      regions[f].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eColor;
-      regions[f].imageSubresource.mipLevel = mip;
-      regions[f].imageSubresource.baseArrayLayer = f;
-      regions[f].imageSubresource.layerCount = 1;
-      regions[f].imageExtent = vk::Extent3D{ mip_size, mip_size, 1 };
-    }
-
-    cmd.copyBufferToImage(staging.buffer(), m_prefiltered_image,
-      vk::ImageLayout::eTransferDstOptimal, regions);
-
-    end_single_time_commands(m_device, cmd_pool, cmd);
-  }
-
-  // Final transition: all mip levels to ShaderReadOnlyOptimal
-  {
-    auto cmd = begin_single_time_commands(m_device, cmd_pool);
-    transition_image_layout(cmd, m_prefiltered_image, vk::ImageLayout::eTransferDstOptimal,
-      vk::ImageLayout::eShaderReadOnlyOptimal, m_mip_levels, 6);
-    end_single_time_commands(m_device, cmd_pool, cmd);
-  }
-
+  end_single_time_commands(m_device, cmd_pool, cmd);
   dev.destroyCommandPool(cmd_pool);
 
-  spdlog::info("Generated prefiltered environment ({} mip levels)", m_mip_levels);
+  dev.destroyDescriptorPool(desc_pool);
+  destroy_compute_pipeline(dev, brdf_pipeline);
+
+  spdlog::trace("Default IBL environment created");
 }
 
 } // namespace sps::vulkan

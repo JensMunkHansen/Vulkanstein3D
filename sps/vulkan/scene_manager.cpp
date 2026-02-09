@@ -61,7 +61,7 @@ void SceneManager::create_defaults(const std::string& hdr_file)
   {
     if (!hdr_file.empty())
     {
-      m_ibl = std::make_unique<IBL>(m_device, hdr_file, 128);
+      m_ibl = std::make_unique<IBL>(m_device, hdr_file, m_ibl_settings);
     }
     else
     {
@@ -73,6 +73,11 @@ void SceneManager::create_defaults(const std::string& hdr_file)
     spdlog::warn("Failed to load HDR '{}': {} - using neutral environment", hdr_file, e.what());
     m_ibl = std::make_unique<IBL>(m_device);
   }
+}
+
+void SceneManager::set_ibl_settings(const IBLSettings& settings)
+{
+  m_ibl_settings = settings;
 }
 
 SceneManager::LoadResult SceneManager::load_initial_scene(
@@ -341,7 +346,7 @@ void SceneManager::load_hdr(const std::string& hdr_file, vk::Buffer uniform_buff
   {
     if (!hdr_file.empty())
     {
-      m_ibl = std::make_unique<IBL>(m_device, hdr_file, 128);
+      m_ibl = std::make_unique<IBL>(m_device, hdr_file, m_ibl_settings);
     }
     else
     {

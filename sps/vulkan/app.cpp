@@ -266,6 +266,7 @@ Application::Application(int argc, char** argv)
 
   // Create scene manager and load initial scene
   m_scene_manager = std::make_unique<SceneManager>(*m_device);
+  m_scene_manager->set_ibl_settings(m_ibl_settings);
   m_scene_manager->create_defaults(m_hdr_file);
   auto load_result = m_scene_manager->load_initial_scene(m_geometry_source, m_gltf_file, m_ply_file);
 
@@ -447,6 +448,19 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     }
   }
   spdlog::trace("HDR environment list: {} entries, current index: {}", m_hdr_files.size(), m_current_hdr_index);
+
+  // IBL settings
+  if (renderer_configuration.contains("IBL"))
+  {
+    const auto& ibl_section = toml::find(renderer_configuration, "IBL");
+    m_ibl_settings.resolution = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "resolution", 256));
+    m_ibl_settings.irradiance_samples = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "irradiance_samples", 2048));
+    m_ibl_settings.prefilter_samples = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "prefilter_samples", 2048));
+    m_ibl_settings.brdf_samples = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "brdf_samples", 1024));
+  }
+  spdlog::info("IBL settings: resolution={}, irradiance_samples={}, prefilter_samples={}, brdf_samples={}",
+    m_ibl_settings.resolution, m_ibl_settings.irradiance_samples,
+    m_ibl_settings.prefilter_samples, m_ibl_settings.brdf_samples);
 
   // Lighting options
   try

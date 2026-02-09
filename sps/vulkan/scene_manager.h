@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sps/vulkan/gltf_loader.h>
+#include <sps/vulkan/ibl.h>
 
 #include <memory>
 #include <optional>
@@ -37,6 +38,9 @@ public:
   // Non-copyable, non-movable
   SceneManager(const SceneManager&) = delete;
   SceneManager& operator=(const SceneManager&) = delete;
+
+  /// Set IBL generation settings (call before create_defaults/load_hdr).
+  void set_ibl_settings(const IBLSettings& settings);
 
   /// Create 1x1 fallback textures and IBL environment.
   void create_defaults(const std::string& hdr_file = "");
@@ -91,6 +95,7 @@ private:
   std::unique_ptr<Texture> m_aoTexture;
 
   // IBL
+  IBLSettings m_ibl_settings;
   std::unique_ptr<IBL> m_ibl;
 
   // Descriptors
