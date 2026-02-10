@@ -1,0 +1,59 @@
+#version 450
+
+// Separable blur for screen-space subsurface scattering
+// Phase 2: blurs the entire HDR image (no masking)
+// Dispatch with workgroup size 16x16
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D inputImage;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform PushConstants {
+  float blurWidth;  // Blur scale (1.0 = offsets in pixels as-is)
+  int direction;    // 0 = horizontal, 1 = vertical
+} pc;
+
+// 13-tap separable kernel (approximates a diffusion profile)
+const int KERNEL_SIZE = 13;
+const float weights[KERNEL_SIZE] = float[](
+  0.096, 0.094, 0.086, 0.074, 0.061, 0.047, 0.034,
+  0.024, 0.015, 0.009, 0.005, 0.003, 0.001
+);
+// Offsets in pixels (scaled by blurWidth)
+const float offsets[KERNEL_SIZE] = float[](
+  0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
+  7.0, 8.0, 9.0, 10.0, 11.0, 12.0
+);
+
+void main()
+{
+  ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+  ivec2 size = imageSize(inputImage);
+
+  if (coord.x >= size.x || coord.y >= size.y)
+    return;
+
+  vec4 center = imageLoad(inputImage, coord);
+  vec4 result = center * weights[0];
+
+  for (int i = 1; i < KERNEL_SIZE; i++)
+  {
+    int o = int(round(offsets[i] * pc.blurWidth));
+    if (o == 0) continue;
+
+    ivec2 offsetVec;
+    if (pc.direction == 0)
+      offsetVec = ivec2(o, 0);
+    else
+      offsetVec = ivec2(0, o);
+
+    ivec2 c1 = clamp(coord + offsetVec, ivec2(0), size - 1);
+    ivec2 c2 = clamp(coord - offsetVec, ivec2(0), size - 1);
+
+    result += imageLoad(inputImage, c1) * weights[i];
+    result += imageLoad(inputImage, c2) * weights[i];
+  }
+
+  imageStore(outputImage, coord, result);
+}

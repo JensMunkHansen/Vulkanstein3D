@@ -21,6 +21,7 @@ public:
 
   void record(const FrameContext& ctx) override;
   [[nodiscard]] bool is_enabled() const override;
+  [[nodiscard]] Phase phase() const override { return Phase::CompositePass; }
 
   void set_pipeline(vk::Pipeline pipeline, vk::PipelineLayout layout)
   {

@@ -13,6 +13,7 @@ set(SHADER_INCLUDES
 set(SHADERS_WITH_INCLUDES
   fragment.frag
   blinn_phong.frag
+  composite.frag
 )
 
 set(SHADERS
@@ -42,6 +43,7 @@ set(COMPUTE_SHADERS
   irradiance.comp
   prefilter_env.comp
   brdf_lut.comp
+  sss_blur.comp
 )
 
 # Compile shaders that use #include (need --include-dir)

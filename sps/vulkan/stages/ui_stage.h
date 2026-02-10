@@ -20,6 +20,7 @@ public:
 
   void record(const FrameContext& ctx) override;
   [[nodiscard]] bool is_enabled() const override;
+  [[nodiscard]] Phase phase() const override { return Phase::CompositePass; }
 
 private:
   const RenderCallback* m_callback;

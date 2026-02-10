@@ -19,6 +19,16 @@ class ResourceDescriptor;
 class RayTracingPipeline;
 class Swapchain;
 
+/// Execution phase for render stages.
+/// Determines which render pass (if any) the stage runs in.
+enum class Phase
+{
+  PrePass,       // Before any render pass (e.g. ray tracing)
+  ScenePass,     // Inside the scene render pass (HDR target)
+  Intermediate,  // Between render passes (e.g. compute blur)
+  CompositePass  // Inside the composite render pass (swapchain target)
+};
+
 /// Per-frame context passed to every stage.
 /// All pointers are non-owning — Application retains ownership.
 struct FrameContext
@@ -27,10 +37,14 @@ struct FrameContext
   uint32_t image_index;
   vk::Extent2D extent;
 
-  // Shared render pass infrastructure (owned by Application)
-  vk::RenderPass render_pass;
-  vk::Framebuffer framebuffer;
+  // Scene render pass infrastructure (HDR target)
+  vk::RenderPass scene_render_pass;
+  vk::Framebuffer scene_framebuffer;
   vk::PipelineLayout pipeline_layout;
+
+  // Composite render pass infrastructure (swapchain target)
+  vk::RenderPass composite_render_pass;
+  vk::Framebuffer composite_framebuffer;
 
   // Scene data (read-only, not owned)
   const Mesh* mesh;
@@ -54,10 +68,11 @@ struct FrameContext
 /// debug view, ray tracing, UI overlay). They record commands into the
 /// command buffer provided via FrameContext.
 ///
-/// Render-pass stages (`uses_render_pass() == true`) execute inside a
-/// render pass that the RenderGraph begins/ends. Non-render-pass stages
-/// (like ray tracing) run before the render pass and manage their own
-/// synchronization.
+/// Stages declare their phase via phase():
+///   - PrePass: runs before any render pass (manages own synchronization)
+///   - ScenePass: runs inside the scene render pass (HDR target)
+///   - Intermediate: runs between render passes (e.g. compute blur)
+///   - CompositePass: runs inside the composite render pass (swapchain target)
 class RenderStage
 {
 public:
@@ -70,9 +85,16 @@ public:
   /// Whether this stage should execute this frame.
   [[nodiscard]] virtual bool is_enabled() const { return true; }
 
-  /// Whether this stage records inside the shared render pass.
-  /// Stages returning false (e.g. ray tracing) run before beginRenderPass.
-  [[nodiscard]] virtual bool uses_render_pass() const { return true; }
+  /// The execution phase of this stage.
+  [[nodiscard]] virtual Phase phase() const { return Phase::ScenePass; }
+
+  /// Whether this stage records inside a render pass.
+  /// PrePass and Intermediate stages return false; Scene and Composite return true.
+  [[nodiscard]] bool uses_render_pass() const
+  {
+    auto p = phase();
+    return p == Phase::ScenePass || p == Phase::CompositePass;
+  }
 
   /// Called when the swapchain is recreated.
   /// Only stages with swapchain-dependent resources need to override.

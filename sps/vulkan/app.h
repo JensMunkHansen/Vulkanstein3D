@@ -29,7 +29,9 @@ namespace sps::vulkan
 class Fence;
 class Semaphore;
 class CommandRegistry;
+class CompositeStage;
 class Debug2DStage;
+class SSSBlurStage;
 class RasterOpaqueStage;
 class RasterBlendStage;
 class RayTracingStage;
@@ -89,8 +91,8 @@ public:
   [[nodiscard]] VkDevice vk_device() const;
   [[nodiscard]] VkQueue vk_graphics_queue() const;
   [[nodiscard]] uint32_t graphics_queue_family() const;
-  [[nodiscard]] VkRenderPass vk_renderpass() const { return m_renderpass; }
-  [[nodiscard]] VkSampleCountFlagBits msaa_samples() const { return static_cast<VkSampleCountFlagBits>(m_msaaSamples); }
+  [[nodiscard]] VkRenderPass vk_renderpass() const { return m_composite_renderpass; }
+  [[nodiscard]] VkSampleCountFlagBits msaa_samples() const { return VK_SAMPLE_COUNT_1_BIT; }
   [[nodiscard]] VkCommandPool vk_command_pool() const { return m_commandPool; }
   [[nodiscard]] uint32_t swapchain_image_count() const;
   [[nodiscard]] GLFWwindow* glfw_window() const;
@@ -122,6 +124,8 @@ public:
   int& tonemap_mode() { return m_tonemap_mode; }
   static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)",
     "ACES + Boost", "Khronos PBR Neutral" };
+  bool& use_sss_blur() { return m_use_sss_blur; }
+  float& sss_blur_width() { return m_sss_blur_width; }
   bool& show_light_indicator() { return m_show_light_indicator; }
   glm::vec3& clear_color() { return m_clear_color; }
   Camera& camera() { return m_camera; }
@@ -192,6 +196,12 @@ private:
   void create_depth_resources();
   void create_msaa_color_resources();
   void create_uniform_buffer();
+  void create_hdr_resources();
+  void create_composite_pipeline();
+  void create_composite_framebuffers();
+  void destroy_hdr_resources();
+  void create_blur_resources();
+  void destroy_blur_resources();
   void create_debug_2d_pipeline();
   void create_light_indicator();
 
@@ -216,11 +226,47 @@ private:
   int m_numFrames;
   float m_frameTime;
 
-  std::vector<vk::Framebuffer> m_frameBuffers;
+  // Scene render pass (HDR target)
+  vk::RenderPass m_scene_renderpass;
+  std::vector<vk::Framebuffer> m_scene_framebuffers;
   vk::PipelineLayout m_pipelineLayout;
-  vk::RenderPass m_renderpass;
   vk::Pipeline m_pipeline;
   vk::Pipeline m_blend_pipeline; // blend on, depth write off
+
+  // HDR offscreen target (single-sample, for composite sampling)
+  static constexpr vk::Format m_hdrFormat = vk::Format::eR16G16B16A16Sfloat;
+  vk::Image m_hdrImage{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_hdrImageMemory{ VK_NULL_HANDLE };
+  vk::ImageView m_hdrImageView{ VK_NULL_HANDLE };
+  vk::Sampler m_hdrSampler{ VK_NULL_HANDLE };
+
+  // HDR MSAA color target (multi-sample, resolves to m_hdrImage)
+  vk::Image m_hdrMsaaImage{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_hdrMsaaImageMemory{ VK_NULL_HANDLE };
+  vk::ImageView m_hdrMsaaImageView{ VK_NULL_HANDLE };
+
+  // Composite render pass (swapchain target)
+  vk::RenderPass m_composite_renderpass;
+  std::vector<vk::Framebuffer> m_composite_framebuffers;
+  vk::Pipeline m_composite_pipeline;
+  vk::PipelineLayout m_composite_pipelineLayout;
+  vk::DescriptorPool m_composite_descriptor_pool{ VK_NULL_HANDLE };
+  vk::DescriptorSetLayout m_composite_descriptor_layout{ VK_NULL_HANDLE };
+  vk::DescriptorSet m_composite_descriptor_set{ VK_NULL_HANDLE };
+
+  // SSS blur (compute, separable H+V)
+  vk::Image m_blurPingImage{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_blurPingImageMemory{ VK_NULL_HANDLE };
+  vk::ImageView m_blurPingImageView{ VK_NULL_HANDLE };
+  vk::Pipeline m_sss_blur_pipeline;
+  vk::PipelineLayout m_sss_blur_pipelineLayout;
+  vk::DescriptorPool m_sss_blur_descriptor_pool{ VK_NULL_HANDLE };
+  vk::DescriptorSetLayout m_sss_blur_descriptor_layout{ VK_NULL_HANDLE };
+  vk::DescriptorSet m_sss_blur_h_descriptor{ VK_NULL_HANDLE }; // HDR→ping
+  vk::DescriptorSet m_sss_blur_v_descriptor{ VK_NULL_HANDLE }; // ping→HDR
+  bool m_use_sss_blur{ false };
+  float m_sss_blur_width{ 0.5f };
+  vk::Extent2D m_blur_extent{};
 
   // 2D debug pipeline (fullscreen quad)
   vk::Pipeline m_debug_2d_pipeline;
@@ -228,9 +274,6 @@ private:
 
   // MSAA
   vk::SampleCountFlagBits m_msaaSamples{ vk::SampleCountFlagBits::e1 };
-  vk::Image m_msaaColorImage{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_msaaColorImageMemory{ VK_NULL_HANDLE };
-  vk::ImageView m_msaaColorImageView{ VK_NULL_HANDLE };
 
   // Depth buffer
   vk::Image m_depthImage;
@@ -328,6 +371,8 @@ private:
 
   // Render graph (stage-based command recording)
   RenderGraph m_render_graph;
+  CompositeStage* m_composite_stage{ nullptr };
+  SSSBlurStage* m_sss_blur_stage{ nullptr };
   Debug2DStage* m_debug_2d_stage{ nullptr };
   RasterOpaqueStage* m_raster_opaque_stage{ nullptr };
   RasterBlendStage* m_raster_blend_stage{ nullptr };

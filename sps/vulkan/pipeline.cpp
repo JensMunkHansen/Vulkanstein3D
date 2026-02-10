@@ -165,6 +165,147 @@ vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageForma
   return nullptr;
 }
 
+vk::RenderPass make_scene_renderpass(vk::Device device, vk::Format hdrFormat,
+  vk::Format depthFormat, bool debug,
+  vk::SampleCountFlagBits msaaSamples)
+{
+  const bool msaa = msaaSamples != vk::SampleCountFlagBits::e1;
+  std::vector<vk::AttachmentDescription> attachments;
+
+  // Attachment 0: Color (MSAA or single-sample, HDR format)
+  vk::AttachmentDescription colorAttachment{};
+  colorAttachment.format = hdrFormat;
+  colorAttachment.samples = msaaSamples;
+  colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+  colorAttachment.storeOp = msaa ? vk::AttachmentStoreOp::eDontCare : vk::AttachmentStoreOp::eStore;
+  colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+  colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+  colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+  colorAttachment.finalLayout = msaa
+    ? vk::ImageLayout::eColorAttachmentOptimal
+    : vk::ImageLayout::eShaderReadOnlyOptimal;
+  attachments.push_back(colorAttachment);
+
+  // Attachment 1: Depth
+  vk::AttachmentDescription depthAttachment{};
+  depthAttachment.format = depthFormat;
+  depthAttachment.samples = msaaSamples;
+  depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+  depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+  depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+  depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+  depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+  depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+  attachments.push_back(depthAttachment);
+
+  // Attachment 2 (MSAA only): Resolve target (single-sample HDR)
+  if (msaa)
+  {
+    vk::AttachmentDescription resolveAttachment{};
+    resolveAttachment.format = hdrFormat;
+    resolveAttachment.samples = vk::SampleCountFlagBits::e1;
+    resolveAttachment.loadOp = vk::AttachmentLoadOp::eDontCare;
+    resolveAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+    resolveAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+    resolveAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+    resolveAttachment.initialLayout = vk::ImageLayout::eUndefined;
+    resolveAttachment.finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    attachments.push_back(resolveAttachment);
+  }
+
+  vk::AttachmentReference colorRef{ 0, vk::ImageLayout::eColorAttachmentOptimal };
+  vk::AttachmentReference depthRef{ 1, vk::ImageLayout::eDepthStencilAttachmentOptimal };
+  vk::AttachmentReference resolveRef{ 2, vk::ImageLayout::eColorAttachmentOptimal };
+
+  vk::SubpassDescription subpass{};
+  subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &colorRef;
+  subpass.pDepthStencilAttachment = &depthRef;
+  if (msaa)
+  {
+    subpass.pResolveAttachments = &resolveRef;
+  }
+
+  vk::SubpassDependency dependency{};
+  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependency.dstSubpass = 0;
+  dependency.srcStageMask =
+    vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+  dependency.srcAccessMask = vk::AccessFlagBits::eNone;
+  dependency.dstStageMask =
+    vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+  dependency.dstAccessMask =
+    vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+  vk::RenderPassCreateInfo rpInfo{};
+  rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+  rpInfo.pAttachments = attachments.data();
+  rpInfo.subpassCount = 1;
+  rpInfo.pSubpasses = &subpass;
+  rpInfo.dependencyCount = 1;
+  rpInfo.pDependencies = &dependency;
+
+  try
+  {
+    return device.createRenderPass(rpInfo);
+  }
+  catch (vk::SystemError err)
+  {
+    if (debug)
+      std::cout << "Failed to create scene renderpass!" << std::endl;
+  }
+  return nullptr;
+}
+
+vk::RenderPass make_composite_renderpass(vk::Device device, vk::Format swapchainFormat, bool debug)
+{
+  // Single color attachment (swapchain image), no depth, no MSAA
+  vk::AttachmentDescription colorAttachment{};
+  colorAttachment.format = swapchainFormat;
+  colorAttachment.samples = vk::SampleCountFlagBits::e1;
+  colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+  colorAttachment.storeOp = vk::AttachmentStoreOp::eStore;
+  colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+  colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+  colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+  colorAttachment.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+  vk::AttachmentReference colorRef{ 0, vk::ImageLayout::eColorAttachmentOptimal };
+
+  vk::SubpassDescription subpass{};
+  subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+  subpass.colorAttachmentCount = 1;
+  subpass.pColorAttachments = &colorRef;
+
+  vk::SubpassDependency dependency{};
+  dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependency.dstSubpass = 0;
+  dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+  dependency.srcAccessMask = vk::AccessFlagBits::eNone;
+  dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+  dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
+
+  vk::RenderPassCreateInfo rpInfo{};
+  rpInfo.attachmentCount = 1;
+  rpInfo.pAttachments = &colorAttachment;
+  rpInfo.subpassCount = 1;
+  rpInfo.pSubpasses = &subpass;
+  rpInfo.dependencyCount = 1;
+  rpInfo.pDependencies = &dependency;
+
+  try
+  {
+    return device.createRenderPass(rpInfo);
+  }
+  catch (vk::SystemError err)
+  {
+    if (debug)
+      std::cout << "Failed to create composite renderpass!" << std::endl;
+  }
+  return nullptr;
+}
+
 /**
         Make a graphics pipeline, along with renderpass and pipeline layout
 

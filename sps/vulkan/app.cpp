@@ -20,11 +20,14 @@
 #include <sps/vulkan/commands.h>
 #include <sps/vulkan/framebuffer.h>
 #include <sps/vulkan/pipeline.h>
+#include <sps/vulkan/shaders.h>
 
 #include <sps/vulkan/fence.h>
 #include <sps/vulkan/semaphore.h>
 
+#include <sps/vulkan/stages/composite_stage.h>
 #include <sps/vulkan/stages/debug_2d_stage.h>
+#include <sps/vulkan/stages/sss_blur_stage.h>
 #include <sps/vulkan/stages/raster_blend_stage.h>
 #include <sps/vulkan/stages/raster_opaque_stage.h>
 #include <sps/vulkan/stages/ray_tracing_stage.h>
@@ -376,6 +379,7 @@ void Application::create_msaa_color_resources()
 {
   vk::Extent2D extent = m_swapchain->extent();
 
+  // MSAA color target uses HDR format (resolves to m_hdrImage)
   vk::ImageCreateInfo imageInfo{};
   imageInfo.imageType = vk::ImageType::e2D;
   imageInfo.extent.width = extent.width;
@@ -383,7 +387,7 @@ void Application::create_msaa_color_resources()
   imageInfo.extent.depth = 1;
   imageInfo.mipLevels = 1;
   imageInfo.arrayLayers = 1;
-  imageInfo.format = m_swapchain->image_format();
+  imageInfo.format = m_hdrFormat;
   imageInfo.tiling = vk::ImageTiling::eOptimal;
   imageInfo.initialLayout = vk::ImageLayout::eUndefined;
   imageInfo.usage =
@@ -391,32 +395,32 @@ void Application::create_msaa_color_resources()
   imageInfo.samples = m_msaaSamples;
   imageInfo.sharingMode = vk::SharingMode::eExclusive;
 
-  m_msaaColorImage = m_device->device().createImage(imageInfo);
+  m_hdrMsaaImage = m_device->device().createImage(imageInfo);
 
   vk::MemoryRequirements memRequirements =
-    m_device->device().getImageMemoryRequirements(m_msaaColorImage);
+    m_device->device().getImageMemoryRequirements(m_hdrMsaaImage);
 
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memRequirements.size;
   allocInfo.memoryTypeIndex = m_device->find_memory_type(
     memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-  m_msaaColorImageMemory = m_device->device().allocateMemory(allocInfo);
-  m_device->device().bindImageMemory(m_msaaColorImage, m_msaaColorImageMemory, 0);
+  m_hdrMsaaImageMemory = m_device->device().allocateMemory(allocInfo);
+  m_device->device().bindImageMemory(m_hdrMsaaImage, m_hdrMsaaImageMemory, 0);
 
   vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_msaaColorImage;
+  viewInfo.image = m_hdrMsaaImage;
   viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_swapchain->image_format();
+  viewInfo.format = m_hdrFormat;
   viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
   viewInfo.subresourceRange.baseMipLevel = 0;
   viewInfo.subresourceRange.levelCount = 1;
   viewInfo.subresourceRange.baseArrayLayer = 0;
   viewInfo.subresourceRange.layerCount = 1;
 
-  m_msaaColorImageView = m_device->device().createImageView(viewInfo);
+  m_hdrMsaaImageView = m_device->device().createImageView(viewInfo);
 
-  spdlog::trace("Created MSAA color image {}x{} ({}x samples)", extent.width, extent.height,
+  spdlog::trace("Created HDR MSAA color image {}x{} ({}x samples)", extent.width, extent.height,
     static_cast<int>(m_msaaSamples));
 }
 
@@ -425,6 +429,428 @@ void Application::create_uniform_buffer()
   m_uniform_buffer =
     std::make_unique<UniformBuffer<UniformBufferObject>>(*m_device, "camera uniform buffer");
   spdlog::trace("Created uniform buffer");
+}
+
+void Application::create_hdr_resources()
+{
+  auto dev = m_device->device();
+  vk::Extent2D extent = m_swapchain->extent();
+
+  // Single-sample HDR image (resolve target for MSAA, or direct render target)
+  vk::ImageCreateInfo imageInfo{};
+  imageInfo.imageType = vk::ImageType::e2D;
+  imageInfo.extent.width = extent.width;
+  imageInfo.extent.height = extent.height;
+  imageInfo.extent.depth = 1;
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.format = m_hdrFormat;
+  imageInfo.tiling = vk::ImageTiling::eOptimal;
+  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+  imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
+    | vk::ImageUsageFlagBits::eStorage;
+  imageInfo.samples = vk::SampleCountFlagBits::e1;
+  imageInfo.sharingMode = vk::SharingMode::eExclusive;
+
+  m_hdrImage = dev.createImage(imageInfo);
+
+  vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_hdrImage);
+  vk::MemoryAllocateInfo allocInfo{};
+  allocInfo.allocationSize = memReqs.size;
+  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+    memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+  m_hdrImageMemory = dev.allocateMemory(allocInfo);
+  dev.bindImageMemory(m_hdrImage, m_hdrImageMemory, 0);
+
+  vk::ImageViewCreateInfo viewInfo{};
+  viewInfo.image = m_hdrImage;
+  viewInfo.viewType = vk::ImageViewType::e2D;
+  viewInfo.format = m_hdrFormat;
+  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  m_hdrImageView = dev.createImageView(viewInfo);
+
+  // Create sampler for composite pass to sample the HDR image
+  if (!m_hdrSampler)
+  {
+    vk::SamplerCreateInfo samplerInfo{};
+    samplerInfo.magFilter = vk::Filter::eLinear;
+    samplerInfo.minFilter = vk::Filter::eLinear;
+    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+    m_hdrSampler = dev.createSampler(samplerInfo);
+  }
+
+  spdlog::trace("Created HDR image {}x{}", extent.width, extent.height);
+}
+
+void Application::destroy_hdr_resources()
+{
+  auto dev = m_device->device();
+
+  if (m_hdrImageView)
+  {
+    dev.destroyImageView(m_hdrImageView);
+    m_hdrImageView = VK_NULL_HANDLE;
+  }
+  if (m_hdrImage)
+  {
+    dev.destroyImage(m_hdrImage);
+    m_hdrImage = VK_NULL_HANDLE;
+  }
+  if (m_hdrImageMemory)
+  {
+    dev.freeMemory(m_hdrImageMemory);
+    m_hdrImageMemory = VK_NULL_HANDLE;
+  }
+
+  if (m_hdrMsaaImageView)
+  {
+    dev.destroyImageView(m_hdrMsaaImageView);
+    m_hdrMsaaImageView = VK_NULL_HANDLE;
+  }
+  if (m_hdrMsaaImage)
+  {
+    dev.destroyImage(m_hdrMsaaImage);
+    m_hdrMsaaImage = VK_NULL_HANDLE;
+  }
+  if (m_hdrMsaaImageMemory)
+  {
+    dev.freeMemory(m_hdrMsaaImageMemory);
+    m_hdrMsaaImageMemory = VK_NULL_HANDLE;
+  }
+}
+
+void Application::create_composite_pipeline()
+{
+  auto dev = m_device->device();
+
+  // Descriptor set layout: single sampler for the HDR buffer
+  vk::DescriptorSetLayoutBinding binding{};
+  binding.binding = 0;
+  binding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+  binding.descriptorCount = 1;
+  binding.stageFlags = vk::ShaderStageFlagBits::eFragment;
+
+  vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.bindingCount = 1;
+  layoutInfo.pBindings = &binding;
+  m_composite_descriptor_layout = dev.createDescriptorSetLayout(layoutInfo);
+
+  // Descriptor pool
+  vk::DescriptorPoolSize poolSize{};
+  poolSize.type = vk::DescriptorType::eCombinedImageSampler;
+  poolSize.descriptorCount = 1;
+
+  vk::DescriptorPoolCreateInfo poolInfo{};
+  poolInfo.maxSets = 1;
+  poolInfo.poolSizeCount = 1;
+  poolInfo.pPoolSizes = &poolSize;
+  m_composite_descriptor_pool = dev.createDescriptorPool(poolInfo);
+
+  // Allocate descriptor set
+  vk::DescriptorSetAllocateInfo allocInfo{};
+  allocInfo.descriptorPool = m_composite_descriptor_pool;
+  allocInfo.descriptorSetCount = 1;
+  allocInfo.pSetLayouts = &m_composite_descriptor_layout;
+  m_composite_descriptor_set = dev.allocateDescriptorSets(allocInfo)[0];
+
+  // Update descriptor with HDR image
+  vk::DescriptorImageInfo imageInfo{};
+  imageInfo.sampler = m_hdrSampler;
+  imageInfo.imageView = m_hdrImageView;
+  imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+  vk::WriteDescriptorSet write{};
+  write.dstSet = m_composite_descriptor_set;
+  write.dstBinding = 0;
+  write.descriptorCount = 1;
+  write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+  write.pImageInfo = &imageInfo;
+  dev.updateDescriptorSets(write, {});
+
+  // Pipeline layout: descriptor set + push constants (exposure + tonemapMode)
+  vk::PushConstantRange pcRange{};
+  pcRange.stageFlags = vk::ShaderStageFlagBits::eFragment;
+  pcRange.offset = 0;
+  pcRange.size = 8; // float exposure + int tonemapMode
+
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+  pipelineLayoutInfo.setLayoutCount = 1;
+  pipelineLayoutInfo.pSetLayouts = &m_composite_descriptor_layout;
+  pipelineLayoutInfo.pushConstantRangeCount = 1;
+  pipelineLayoutInfo.pPushConstantRanges = &pcRange;
+  m_composite_pipelineLayout = dev.createPipelineLayout(pipelineLayoutInfo);
+
+  // Create pipeline using existing infrastructure
+  sps::vulkan::GraphicsPipelineInBundle specification{};
+  specification.device = dev;
+  specification.vertexFilepath = SHADER_DIR "fullscreen_quad.spv";
+  specification.fragmentFilepath = SHADER_DIR "composite.spv";
+  specification.swapchainExtent = m_swapchain->extent();
+  specification.swapchainImageFormat = m_swapchain->image_format();
+  specification.backfaceCulling = false;
+  specification.existingRenderPass = m_composite_renderpass;
+  specification.existingPipelineLayout = m_composite_pipelineLayout;
+  specification.depthTestEnabled = false;
+  // No MSAA for composite pass
+  specification.msaaSamples = vk::SampleCountFlagBits::e1;
+
+  auto output = sps::vulkan::create_graphics_pipeline(specification, true);
+  m_composite_pipeline = output.pipeline;
+
+  spdlog::info("Created composite pipeline");
+}
+
+void Application::create_composite_framebuffers()
+{
+  auto dev = m_device->device();
+  vk::Extent2D extent = m_swapchain->extent();
+  const auto& imageViews = m_swapchain->image_views();
+
+  m_composite_framebuffers.resize(imageViews.size());
+  for (size_t i = 0; i < imageViews.size(); i++)
+  {
+    vk::ImageView attachments[] = { imageViews[i] };
+
+    vk::FramebufferCreateInfo fbInfo{};
+    fbInfo.renderPass = m_composite_renderpass;
+    fbInfo.attachmentCount = 1;
+    fbInfo.pAttachments = attachments;
+    fbInfo.width = extent.width;
+    fbInfo.height = extent.height;
+    fbInfo.layers = 1;
+
+    m_composite_framebuffers[i] = dev.createFramebuffer(fbInfo);
+  }
+}
+
+void Application::create_blur_resources()
+{
+  auto dev = m_device->device();
+  vk::Extent2D extent = m_swapchain->extent();
+  m_blur_extent = extent;
+
+  // Create ping image (intermediate for separable blur)
+  vk::ImageCreateInfo imageInfo{};
+  imageInfo.imageType = vk::ImageType::e2D;
+  imageInfo.extent.width = extent.width;
+  imageInfo.extent.height = extent.height;
+  imageInfo.extent.depth = 1;
+  imageInfo.mipLevels = 1;
+  imageInfo.arrayLayers = 1;
+  imageInfo.format = m_hdrFormat;
+  imageInfo.tiling = vk::ImageTiling::eOptimal;
+  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
+  imageInfo.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
+  imageInfo.samples = vk::SampleCountFlagBits::e1;
+  imageInfo.sharingMode = vk::SharingMode::eExclusive;
+
+  m_blurPingImage = dev.createImage(imageInfo);
+
+  vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_blurPingImage);
+  vk::MemoryAllocateInfo allocInfo{};
+  allocInfo.allocationSize = memReqs.size;
+  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+    memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+  m_blurPingImageMemory = dev.allocateMemory(allocInfo);
+  dev.bindImageMemory(m_blurPingImage, m_blurPingImageMemory, 0);
+
+  vk::ImageViewCreateInfo viewInfo{};
+  viewInfo.image = m_blurPingImage;
+  viewInfo.viewType = vk::ImageViewType::e2D;
+  viewInfo.format = m_hdrFormat;
+  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+  viewInfo.subresourceRange.baseMipLevel = 0;
+  viewInfo.subresourceRange.levelCount = 1;
+  viewInfo.subresourceRange.baseArrayLayer = 0;
+  viewInfo.subresourceRange.layerCount = 1;
+
+  m_blurPingImageView = dev.createImageView(viewInfo);
+
+  // Transition ping image to General layout using a one-shot command buffer
+  {
+    vk::CommandBufferAllocateInfo allocCmdInfo{};
+    allocCmdInfo.commandPool = m_commandPool;
+    allocCmdInfo.level = vk::CommandBufferLevel::ePrimary;
+    allocCmdInfo.commandBufferCount = 1;
+    auto cmd = dev.allocateCommandBuffers(allocCmdInfo)[0];
+    cmd.begin(vk::CommandBufferBeginInfo{ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+
+    vk::ImageMemoryBarrier barrier{};
+    barrier.oldLayout = vk::ImageLayout::eUndefined;
+    barrier.newLayout = vk::ImageLayout::eGeneral;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = m_blurPingImage;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.srcAccessMask = {};
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
+    cmd.pipelineBarrier(
+      vk::PipelineStageFlagBits::eTopOfPipe,
+      vk::PipelineStageFlagBits::eComputeShader,
+      {}, {}, {}, barrier);
+
+    cmd.end();
+    vk::SubmitInfo submitInfo{};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    m_device->graphics_queue().submit(submitInfo);
+    m_device->graphics_queue().waitIdle();
+    dev.freeCommandBuffers(m_commandPool, cmd);
+  }
+
+  // Create descriptor set layout (2 storage images)
+  if (!m_sss_blur_descriptor_layout)
+  {
+    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = vk::DescriptorType::eStorageImage;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = vk::DescriptorType::eStorageImage;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+
+    vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
+    m_sss_blur_descriptor_layout = dev.createDescriptorSetLayout(layoutInfo);
+  }
+
+  // Create descriptor pool (2 sets, 4 storage images total)
+  if (!m_sss_blur_descriptor_pool)
+  {
+    vk::DescriptorPoolSize poolSize{};
+    poolSize.type = vk::DescriptorType::eStorageImage;
+    poolSize.descriptorCount = 4;
+
+    vk::DescriptorPoolCreateInfo poolInfo{};
+    poolInfo.maxSets = 2;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    m_sss_blur_descriptor_pool = dev.createDescriptorPool(poolInfo);
+  }
+  else
+  {
+    dev.resetDescriptorPool(m_sss_blur_descriptor_pool);
+  }
+
+  // Allocate 2 descriptor sets
+  std::array<vk::DescriptorSetLayout, 2> layouts = { m_sss_blur_descriptor_layout, m_sss_blur_descriptor_layout };
+  vk::DescriptorSetAllocateInfo dsAllocInfo{};
+  dsAllocInfo.descriptorPool = m_sss_blur_descriptor_pool;
+  dsAllocInfo.descriptorSetCount = 2;
+  dsAllocInfo.pSetLayouts = layouts.data();
+  auto sets = dev.allocateDescriptorSets(dsAllocInfo);
+  m_sss_blur_h_descriptor = sets[0]; // H pass: read HDR, write ping
+  m_sss_blur_v_descriptor = sets[1]; // V pass: read ping, write HDR
+
+  // Update H descriptor: binding 0 = HDR (read), binding 1 = ping (write)
+  vk::DescriptorImageInfo hdrInfo{};
+  hdrInfo.imageView = m_hdrImageView;
+  hdrInfo.imageLayout = vk::ImageLayout::eGeneral;
+
+  vk::DescriptorImageInfo pingInfo{};
+  pingInfo.imageView = m_blurPingImageView;
+  pingInfo.imageLayout = vk::ImageLayout::eGeneral;
+
+  std::array<vk::WriteDescriptorSet, 4> writes{};
+  writes[0].dstSet = m_sss_blur_h_descriptor;
+  writes[0].dstBinding = 0;
+  writes[0].descriptorCount = 1;
+  writes[0].descriptorType = vk::DescriptorType::eStorageImage;
+  writes[0].pImageInfo = &hdrInfo;
+
+  writes[1].dstSet = m_sss_blur_h_descriptor;
+  writes[1].dstBinding = 1;
+  writes[1].descriptorCount = 1;
+  writes[1].descriptorType = vk::DescriptorType::eStorageImage;
+  writes[1].pImageInfo = &pingInfo;
+
+  writes[2].dstSet = m_sss_blur_v_descriptor;
+  writes[2].dstBinding = 0;
+  writes[2].descriptorCount = 1;
+  writes[2].descriptorType = vk::DescriptorType::eStorageImage;
+  writes[2].pImageInfo = &pingInfo;
+
+  writes[3].dstSet = m_sss_blur_v_descriptor;
+  writes[3].dstBinding = 1;
+  writes[3].descriptorCount = 1;
+  writes[3].descriptorType = vk::DescriptorType::eStorageImage;
+  writes[3].pImageInfo = &hdrInfo;
+
+  dev.updateDescriptorSets(writes, {});
+
+  // Create pipeline layout
+  if (!m_sss_blur_pipelineLayout)
+  {
+    vk::PushConstantRange pcRange{};
+    pcRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
+    pcRange.offset = 0;
+    pcRange.size = 8; // float blurWidth + int direction
+
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &m_sss_blur_descriptor_layout;
+    pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pcRange;
+    m_sss_blur_pipelineLayout = dev.createPipelineLayout(pipelineLayoutInfo);
+  }
+
+  // Create compute pipeline
+  if (!m_sss_blur_pipeline)
+  {
+    auto shaderModule = sps::vulkan::createModule(SHADER_DIR "sss_blur.spv", dev, true);
+
+    vk::PipelineShaderStageCreateInfo stageInfo{};
+    stageInfo.stage = vk::ShaderStageFlagBits::eCompute;
+    stageInfo.module = shaderModule;
+    stageInfo.pName = "main";
+
+    vk::ComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.stage = stageInfo;
+    pipelineInfo.layout = m_sss_blur_pipelineLayout;
+
+    m_sss_blur_pipeline = dev.createComputePipeline(nullptr, pipelineInfo).value;
+
+    dev.destroyShaderModule(shaderModule);
+  }
+
+  spdlog::info("Created SSS blur resources {}x{}", extent.width, extent.height);
+}
+
+void Application::destroy_blur_resources()
+{
+  auto dev = m_device->device();
+
+  if (m_blurPingImageView)
+  {
+    dev.destroyImageView(m_blurPingImageView);
+    m_blurPingImageView = VK_NULL_HANDLE;
+  }
+  if (m_blurPingImage)
+  {
+    dev.destroyImage(m_blurPingImage);
+    m_blurPingImage = VK_NULL_HANDLE;
+  }
+  if (m_blurPingImageMemory)
+  {
+    dev.freeMemory(m_blurPingImageMemory);
+    m_blurPingImageMemory = VK_NULL_HANDLE;
+  }
 }
 
 void Application::create_rt_storage_image()
@@ -908,9 +1334,11 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.command_buffer = commandBuffer;
   ctx.image_index = imageIndex;
   ctx.extent = m_swapchain->extent();
-  ctx.render_pass = m_renderpass;
-  ctx.framebuffer = m_frameBuffers[imageIndex];
+  ctx.scene_render_pass = m_scene_renderpass;
+  ctx.scene_framebuffer = m_scene_framebuffers[imageIndex];
   ctx.pipeline_layout = m_pipelineLayout;
+  ctx.composite_render_pass = m_composite_renderpass;
+  ctx.composite_framebuffer = m_composite_framebuffers[imageIndex];
   ctx.mesh = m_scene_manager->mesh();
   ctx.scene = m_scene_manager->scene();
   ctx.camera = &m_camera;
@@ -968,27 +1396,24 @@ void Application::recreate_swapchain()
   m_device->wait_idle();
 
   // 3. Destroy framebuffers (reverse order of creation)
-  for (auto framebuffer : m_frameBuffers)
-  {
-    m_device->device().destroyFramebuffer(framebuffer);
-  }
-  m_frameBuffers.clear();
+  for (auto fb : m_scene_framebuffers)
+    m_device->device().destroyFramebuffer(fb);
+  m_scene_framebuffers.clear();
+
+  for (auto fb : m_composite_framebuffers)
+    m_device->device().destroyFramebuffer(fb);
+  m_composite_framebuffers.clear();
 
   // 4. Destroy old depth resources
   m_device->device().destroyImageView(m_depthImageView);
   m_device->device().destroyImage(m_depthImage);
   m_device->device().freeMemory(m_depthImageMemory);
 
-  // 4b. Destroy old MSAA color resources
-  if (m_msaaColorImageView)
-  {
-    m_device->device().destroyImageView(m_msaaColorImageView);
-    m_device->device().destroyImage(m_msaaColorImage);
-    m_device->device().freeMemory(m_msaaColorImageMemory);
-    m_msaaColorImageView = VK_NULL_HANDLE;
-    m_msaaColorImage = VK_NULL_HANDLE;
-    m_msaaColorImageMemory = VK_NULL_HANDLE;
-  }
+  // 4b. Destroy old blur resources (depends on HDR image views)
+  destroy_blur_resources();
+
+  // 4c. Destroy old HDR resources (includes MSAA)
+  destroy_hdr_resources();
 
   // 5. Recreate semaphores (old ones may still be referenced by old swapchain presentation)
   m_renderFinished.clear();
@@ -1006,7 +1431,8 @@ void Application::recreate_swapchain()
   // 8. Recreate depth resources for new size
   create_depth_resources();
 
-  // 8a. Recreate MSAA color resources
+  // 8a. Recreate HDR resources
+  create_hdr_resources();
   if (m_msaaSamples != vk::SampleCountFlagBits::e1)
   {
     create_msaa_color_resources();
@@ -1038,14 +1464,59 @@ void Application::recreate_swapchain()
     m_device->device().updateDescriptorSets(write, {});
   }
 
-  // 9. Create new framebuffers
-  sps::vulkan::framebufferInput frameBufferInput;
-  frameBufferInput.device = m_device->device();
-  frameBufferInput.renderpass = m_renderpass;
-  frameBufferInput.swapchainExtent = m_swapchain->extent();
-  frameBufferInput.depthImageView = m_depthImageView;
-  frameBufferInput.msaaColorImageView = m_msaaColorImageView;
-  m_frameBuffers = sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
+  // 9. Create new scene framebuffers (HDR target)
+  {
+    vk::Extent2D extent = m_swapchain->extent();
+    m_scene_framebuffers.resize(m_swapchain->image_count());
+    for (uint32_t i = 0; i < m_swapchain->image_count(); i++)
+    {
+      std::vector<vk::ImageView> attachments;
+      if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+      {
+        // MSAA: [hdrMsaa, depth, hdrResolve]
+        attachments = { m_hdrMsaaImageView, m_depthImageView, m_hdrImageView };
+      }
+      else
+      {
+        // No MSAA: [hdr, depth]
+        attachments = { m_hdrImageView, m_depthImageView };
+      }
+      vk::FramebufferCreateInfo fbInfo{};
+      fbInfo.renderPass = m_scene_renderpass;
+      fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+      fbInfo.pAttachments = attachments.data();
+      fbInfo.width = extent.width;
+      fbInfo.height = extent.height;
+      fbInfo.layers = 1;
+      m_scene_framebuffers[i] = m_device->device().createFramebuffer(fbInfo);
+    }
+  }
+
+  // 9b. Create new composite framebuffers
+  create_composite_framebuffers();
+
+  // 9c. Update composite descriptor set with new HDR image view
+  {
+    vk::DescriptorImageInfo imageInfo{};
+    imageInfo.sampler = m_hdrSampler;
+    imageInfo.imageView = m_hdrImageView;
+    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+
+    vk::WriteDescriptorSet write{};
+    write.dstSet = m_composite_descriptor_set;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    write.pImageInfo = &imageInfo;
+    m_device->device().updateDescriptorSets(write, {});
+  }
+
+  // 9d. Recreate blur resources (needs HDR image + command pool)
+  create_blur_resources();
+  if (m_sss_blur_stage)
+  {
+    m_sss_blur_stage->set_descriptors(m_sss_blur_h_descriptor, m_sss_blur_v_descriptor);
+  }
 
   // Update camera aspect ratio
   m_camera.set_aspect_ratio(static_cast<float>(width) / static_cast<float>(height));
@@ -1146,12 +1617,16 @@ void Application::make_pipeline(
   m_vertex_shader_path = vertex_shader;
   m_fragment_shader_path = fragment_shader;
 
+  // Create scene render pass (HDR target)
+  m_scene_renderpass = sps::vulkan::make_scene_renderpass(
+    m_device->device(), m_hdrFormat, m_depthFormat, true, m_msaaSamples);
+
   sps::vulkan::GraphicsPipelineInBundle specification = {};
   specification.device = m_device->device();
   specification.vertexFilepath = vertex_shader;
   specification.fragmentFilepath = fragment_shader;
   specification.swapchainExtent = m_swapchain->extent();
-  specification.swapchainImageFormat = m_swapchain->image_format();
+  specification.swapchainImageFormat = m_hdrFormat; // HDR target format
   specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
 
   // Set vertex input format
@@ -1171,9 +1646,10 @@ void Application::make_pipeline(
   // MSAA
   specification.msaaSamples = m_msaaSamples;
 
-  // Push constant: model(64) + baseColorFactor(16) + metallicFactor(4) + roughnessFactor(4) + alphaCutoff(4) + alphaMode(4)
-  //   + iridescenceFactor(4) + iridescenceIor(4) + iridescenceThicknessMin(4) + iridescenceThicknessMax(4)
-  //   + transmissionFactor(4) + thicknessFactor(4) + attenuationColorPacked(4) + attenuationDistance(4) = 128 bytes
+  // Use the scene render pass
+  specification.existingRenderPass = m_scene_renderpass;
+
+  // Push constant: 128 bytes
   vk::PushConstantRange pcRange{
     vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 128
   };
@@ -1187,14 +1663,12 @@ void Application::make_pipeline(
     sps::vulkan::create_graphics_pipeline(specification, true);
 
   m_pipelineLayout = output.layout;
-  m_renderpass = output.renderpass;
   m_pipeline = output.pipeline;
 
   // Pipeline 2: blend (alpha blend on, depth write off, reuse layout + renderpass)
   specification.blendEnabled = true;
   specification.depthWriteEnabled = false;
   specification.existingPipelineLayout = m_pipelineLayout;
-  specification.existingRenderPass = m_renderpass;
 
   sps::vulkan::GraphicsPipelineOutBundle blendOutput =
     sps::vulkan::create_graphics_pipeline(specification, true);
@@ -1218,14 +1692,10 @@ void Application::create_debug_2d_pipeline()
   // Rasterizer options
   specification.backfaceCulling = false;
 
-  // Use existing render pass (must match main pipeline's render pass for compatibility)
-  // Even though we don't use depth, we need a compatible render pass
-  specification.existingRenderPass = m_renderpass;
-  specification.depthTestEnabled = false; // We won't write depth, but pass is compatible
-  specification.depthFormat = m_depthFormat;
-
-  // MSAA must match render pass
-  specification.msaaSamples = m_msaaSamples;
+  // Debug 2D renders in the composite pass (swapchain target, no depth, no MSAA)
+  specification.existingRenderPass = m_composite_renderpass;
+  specification.depthTestEnabled = false;
+  specification.msaaSamples = vk::SampleCountFlagBits::e1;
 
   sps::vulkan::GraphicsPipelineOutBundle output =
     sps::vulkan::create_graphics_pipeline(specification, true);
@@ -1305,7 +1775,7 @@ void Application::reload_shaders(
   m_device->device().destroyPipeline(m_pipeline);
   m_device->device().destroyPipeline(m_blend_pipeline);
   m_device->device().destroyPipelineLayout(m_pipelineLayout);
-  m_device->device().destroyRenderPass(m_renderpass);
+  m_device->device().destroyRenderPass(m_scene_renderpass);
 
   make_pipeline(vertex_shader, fragment_shader);
 
@@ -1714,32 +2184,51 @@ Application::~Application()
 
   m_device->device().destroyCommandPool(m_commandPool);
 
+  // Destroy scene pipelines
   m_device->device().destroyPipeline(m_pipeline);
   m_device->device().destroyPipeline(m_blend_pipeline);
   m_device->device().destroyPipelineLayout(m_pipelineLayout);
-  m_device->device().destroyRenderPass(m_renderpass);
+  m_device->device().destroyRenderPass(m_scene_renderpass);
 
-  // Destroy 2D debug pipeline (render pass is shared with main pipeline)
+  // Destroy 2D debug pipeline
   m_device->device().destroyPipeline(m_debug_2d_pipeline);
   m_device->device().destroyPipelineLayout(m_debug_2d_pipelineLayout);
 
-  for (auto framebuffer : m_frameBuffers)
-  {
-    m_device->device().destroyFramebuffer(framebuffer);
-  }
+  // Destroy composite pipeline
+  m_device->device().destroyPipeline(m_composite_pipeline);
+  m_device->device().destroyPipelineLayout(m_composite_pipelineLayout);
+  m_device->device().destroyRenderPass(m_composite_renderpass);
+  if (m_composite_descriptor_pool)
+    m_device->device().destroyDescriptorPool(m_composite_descriptor_pool);
+  if (m_composite_descriptor_layout)
+    m_device->device().destroyDescriptorSetLayout(m_composite_descriptor_layout);
+
+  // Destroy framebuffers
+  for (auto fb : m_scene_framebuffers)
+    m_device->device().destroyFramebuffer(fb);
+  for (auto fb : m_composite_framebuffers)
+    m_device->device().destroyFramebuffer(fb);
 
   // Destroy depth resources
   m_device->device().destroyImageView(m_depthImageView);
   m_device->device().destroyImage(m_depthImage);
   m_device->device().freeMemory(m_depthImageMemory);
 
-  // Destroy MSAA color resources
-  if (m_msaaColorImageView)
-  {
-    m_device->device().destroyImageView(m_msaaColorImageView);
-    m_device->device().destroyImage(m_msaaColorImage);
-    m_device->device().freeMemory(m_msaaColorImageMemory);
-  }
+  // Destroy HDR resources (includes MSAA)
+  destroy_hdr_resources();
+  if (m_hdrSampler)
+    m_device->device().destroySampler(m_hdrSampler);
+
+  // Destroy SSS blur resources
+  destroy_blur_resources();
+  if (m_sss_blur_pipeline)
+    m_device->device().destroyPipeline(m_sss_blur_pipeline);
+  if (m_sss_blur_pipelineLayout)
+    m_device->device().destroyPipelineLayout(m_sss_blur_pipelineLayout);
+  if (m_sss_blur_descriptor_pool)
+    m_device->device().destroyDescriptorPool(m_sss_blur_descriptor_pool);
+  if (m_sss_blur_descriptor_layout)
+    m_device->device().destroyDescriptorSetLayout(m_sss_blur_descriptor_layout);
 
   // Destroy RT resources
   m_rt_pipeline.reset();
@@ -1765,14 +2254,46 @@ Application::~Application()
 
 void Application::finalize_setup()
 {
-  sps::vulkan::framebufferInput frameBufferInput;
-  frameBufferInput.device = m_device->device();
-  frameBufferInput.renderpass = m_renderpass;
-  frameBufferInput.swapchainExtent = m_swapchain->extent();
-  frameBufferInput.depthImageView = m_depthImageView;
-  frameBufferInput.msaaColorImageView = m_msaaColorImageView;
+  // Create HDR offscreen resources
+  create_hdr_resources();
+  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+  {
+    create_msaa_color_resources();
+  }
 
-  m_frameBuffers = sps::vulkan::make_framebuffers(frameBufferInput, *m_swapchain, m_debugMode);
+  // Create scene framebuffers (HDR target)
+  {
+    vk::Extent2D extent = m_swapchain->extent();
+    m_scene_framebuffers.resize(m_swapchain->image_count());
+    for (uint32_t i = 0; i < m_swapchain->image_count(); i++)
+    {
+      std::vector<vk::ImageView> attachments;
+      if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+      {
+        attachments = { m_hdrMsaaImageView, m_depthImageView, m_hdrImageView };
+      }
+      else
+      {
+        attachments = { m_hdrImageView, m_depthImageView };
+      }
+      vk::FramebufferCreateInfo fbInfo{};
+      fbInfo.renderPass = m_scene_renderpass;
+      fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+      fbInfo.pAttachments = attachments.data();
+      fbInfo.width = extent.width;
+      fbInfo.height = extent.height;
+      fbInfo.layers = 1;
+      m_scene_framebuffers[i] = m_device->device().createFramebuffer(fbInfo);
+    }
+  }
+
+  // Create composite render pass and framebuffers
+  m_composite_renderpass = sps::vulkan::make_composite_renderpass(
+    m_device->device(), m_swapchain->image_format(), true);
+  create_composite_framebuffers();
+
+  // Create composite pipeline (tone mapping + gamma)
+  create_composite_pipeline();
 
   m_commandPool = sps::vulkan::make_command_pool(*m_device, m_debugMode);
 
@@ -1787,38 +2308,43 @@ void Application::finalize_setup()
     m_renderFinished[i] = std::make_unique<Semaphore>(*m_device, "render-finished-" + std::to_string(i));
   }
 
-  // Create 2D debug pipeline (fullscreen quad for texture viewing)
-  create_debug_2d_pipeline();
+  // Create SSS blur resources (needs command pool for one-shot layout transition)
+  create_blur_resources();
 
-  // Light indicator disabled - needs push constants for per-draw transforms
-  // create_light_indicator();
+  // Create 2D debug pipeline (uses composite render pass)
+  create_debug_2d_pipeline();
 
 #if 1 // Enable ray tracing
   spdlog::info("RT init check: supports_rt={}", m_device->supports_ray_tracing());
   if (m_device->supports_ray_tracing())
   {
     spdlog::info("Starting RT initialization...");
-    // Build acceleration structures
     build_acceleration_structures();
-
-    // Create RT resources
     create_rt_storage_image();
     create_rt_descriptor();
     create_rt_pipeline();
-
     spdlog::info("Ray tracing enabled");
   }
 #endif
 
-  // Register render stages (order matters: pre-pass first, then render-pass stages)
+  // Register render stages
+  // Order within each phase doesn't matter — the render graph groups by phase.
   m_ray_tracing_stage = m_render_graph.add<RayTracingStage>(
     &m_use_raytracing, m_device.get(), m_rt_pipeline.get(), &m_rt_image, &m_rt_descriptor_set);
-  m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
-    &m_debug_2d_mode, &m_debug_material_index, m_debug_2d_pipeline, m_debug_2d_pipelineLayout);
   m_raster_opaque_stage = m_render_graph.add<RasterOpaqueStage>(
     &m_use_raytracing, &m_debug_2d_mode, m_pipeline);
   m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
     &m_use_raytracing, &m_debug_2d_mode, m_blend_pipeline);
+  m_sss_blur_stage = m_render_graph.add<SSSBlurStage>(
+    &m_use_sss_blur, &m_sss_blur_width,
+    m_sss_blur_pipeline, m_sss_blur_pipelineLayout,
+    m_sss_blur_h_descriptor, m_sss_blur_v_descriptor,
+    &m_hdrImage, &m_blur_extent);
+  m_composite_stage = m_render_graph.add<CompositeStage>(
+    m_composite_pipeline, m_composite_pipelineLayout,
+    m_composite_descriptor_set, &m_exposure, &m_tonemap_mode);
+  m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
+    &m_debug_2d_mode, &m_debug_material_index, m_debug_2d_pipeline, m_debug_2d_pipelineLayout);
   m_ui_stage = m_render_graph.add<UIStage>(&m_ui_render_callback);
 }
 

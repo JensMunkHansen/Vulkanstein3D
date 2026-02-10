@@ -116,15 +116,6 @@ void main()
 
   vec3 result = ambient + diffuse + specular;
 
-  // Apply exposure
-  float exposure = ubo.flags.w;
-  result *= exposure;
-
-  // Tone mapping (selectable via ibl_params.z)
-  result = applyToneMap(result, int(ubo.ibl_params.z));
-
-  // Gamma correction (linear to sRGB)
-  result = linearToSRGB(result);
-
+  // Output linear HDR (tone mapping + gamma applied in composite pass)
   outColor = vec4(result, 1.0);
 }

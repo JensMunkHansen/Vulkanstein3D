@@ -31,7 +31,7 @@ public:
 
   void record(const FrameContext& ctx) override;
   [[nodiscard]] bool is_enabled() const override;
-  [[nodiscard]] bool uses_render_pass() const override { return false; }
+  [[nodiscard]] Phase phase() const override { return Phase::PrePass; }
 
 private:
   const bool* m_use_rt;

@@ -137,6 +137,8 @@ add_library(${TARGET_NAME}
   stages/raster_opaque_stage.cpp
   stages/raster_blend_stage.cpp
   stages/ray_tracing_stage.cpp
+  stages/composite_stage.cpp
+  stages/sss_blur_stage.cpp
   ../tools/cla_parser.cpp
   )
 

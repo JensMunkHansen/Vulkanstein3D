@@ -68,6 +68,15 @@ vk::RenderPass make_renderpass(vk::Device device, vk::Format swapchainImageForma
   bool depthEnabled, vk::Format depthFormat, bool debug,
   vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1);
 
+/// Scene render pass: renders to an HDR color target (with optional MSAA + resolve).
+/// The resolved HDR image ends in eShaderReadOnlyOptimal for sampling by the composite pass.
+vk::RenderPass make_scene_renderpass(vk::Device device, vk::Format hdrFormat,
+  vk::Format depthFormat, bool debug,
+  vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1);
+
+/// Composite render pass: single swapchain color attachment, no depth.
+vk::RenderPass make_composite_renderpass(vk::Device device, vk::Format swapchainFormat, bool debug);
+
 GraphicsPipelineOutBundle create_graphics_pipeline(
   GraphicsPipelineInBundle& specification, bool debug);
 

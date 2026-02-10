@@ -13,6 +13,6 @@ void main()
   fragTexCoord = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
   gl_Position = vec4(fragTexCoord * 2.0 - 1.0, 0.0, 1.0);
 
-  // Flip Y for Vulkan coordinate system
-  fragTexCoord.y = 1.0 - fragTexCoord.y;
+  // In Vulkan: NDC (-1,-1) = top-left, texture UV (0,0) = top-left
+  // No Y flip needed — both coordinate systems agree
 }

@@ -412,15 +412,7 @@ void main()
     color += emissive;  // Emissive texture is sRGB format — GPU converts to linear on sample
   }
 
-  // Apply exposure
-  float exposure = ubo.flags.w;
-  color *= exposure;
-
-  // HDR tone mapping (selectable via ibl_params.z)
-  color = applyToneMap(color, int(ubo.ibl_params.z));
-
-  // Gamma correction (linear to sRGB)
-  color = linearToSRGB(color);
+  // Output linear HDR (tone mapping + gamma applied in composite pass)
 
   // Alpha mode handling (late discard per Khronos reference)
   uint alphaModeValue = pc.alphaMode & 3u;  // Mask off doubleSided bit
