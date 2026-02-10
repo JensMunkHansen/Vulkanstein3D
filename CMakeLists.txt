@@ -20,7 +20,7 @@ endforeach()
 include(CMakeDependentOption)
 
 # Download dependencies through CMake
-include(cmake/dependencies.cmake)
+include(dependencies.cmake)
 
 project(Vulkanstein3D
   VERSION 1.0
