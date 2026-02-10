@@ -110,7 +110,7 @@ files = [
       "@DATA_DIR@/CompareMetallic/glTF/CompareMetallic.gltf",
       "@DATA_DIR@/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
       "@DATA_DIR@/IridescenceMetallicSpheres/glTF/IridescenceMetallicSpheres.gltf",
-      
+      "@DATA_DIR@/ScatteringSkull/glTF/ScatteringSkull.gltf",
 ]
 
 [HDRenvironments]

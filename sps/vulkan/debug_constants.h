@@ -17,7 +17,10 @@ enum TextureIndex : int
   TEX_METALLIC_ROUGHNESS = 2,
   TEX_EMISSIVE = 3,
   TEX_AO = 4,
-  TEX_COUNT = 5
+  TEX_IRIDESCENCE = 5,
+  TEX_IRIDESCENCE_THICKNESS = 6,
+  TEX_THICKNESS = 7,
+  TEX_COUNT = 8
 };
 
 // Channel display modes
@@ -42,9 +45,14 @@ enum ShaderMode : int
   SHADER_DEBUG_METALLIC_ROUGHNESS = 5,
   SHADER_DEBUG_AO = 6,
   SHADER_DEBUG_EMISSIVE = 7,
-  SHADER_2D_TEXTURE = 8,  // Fullscreen 2D texture view
-  SHADER_COUNT = 9
+  SHADER_DEBUG_THICKNESS = 8,
+  SHADER_DEBUG_SSS = 9,
+  SHADER_2D_TEXTURE = 10,  // Fullscreen 2D texture view (not in 3D dropdown)
+  SHADER_COUNT = 11
 };
+
+// Number of 3D shaders shown in the UI dropdown (excludes 2D texture view)
+inline constexpr int SHADER_3D_COUNT = SHADER_2D_TEXTURE;
 
 // String names for UI
 inline constexpr const char* texture_names[] = {
@@ -52,7 +60,10 @@ inline constexpr const char* texture_names[] = {
   "Normal",
   "Metallic/Roughness",
   "Emissive",
-  "AO"
+  "AO",
+  "Iridescence",
+  "Iridescence Thickness",
+  "Thickness"
 };
 
 inline constexpr const char* channel_names[] = {
@@ -72,6 +83,8 @@ inline constexpr const char* shader_names[] = {
   "Debug: Metallic/Roughness",
   "Debug: AO",
   "Debug: Emissive",
+  "Debug: Thickness",
+  "Debug: SSS",
   "2D Texture View"
 };
 
@@ -85,6 +98,8 @@ inline const char* vertex_shaders[] = {
   SHADER_DIR "vertex.spv",           // Debug Metallic/Roughness
   SHADER_DIR "vertex.spv",           // Debug AO
   SHADER_DIR "vertex.spv",           // Debug Emissive
+  SHADER_DIR "vertex.spv",           // Debug Thickness
+  SHADER_DIR "vertex.spv",           // Debug SSS
   SHADER_DIR "fullscreen_quad.spv"   // 2D Texture
 };
 
@@ -97,6 +112,8 @@ inline const char* fragment_shaders[] = {
   SHADER_DIR "debug_metallic_roughness.spv",
   SHADER_DIR "debug_ao.spv",
   SHADER_DIR "debug_emissive.spv",
+  SHADER_DIR "debug_thickness.spv",
+  SHADER_DIR "debug_sss.spv",
   SHADER_DIR "debug_texture2d.spv"
 };
 

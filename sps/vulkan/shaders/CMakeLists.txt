@@ -25,6 +25,8 @@ set(SHADERS
   debug_metallic_roughness.frag
   debug_ao.frag
   debug_emissive.frag
+  debug_thickness.frag
+  debug_sss.frag
   fullscreen_quad.vert
   debug_texture2d.frag
 )

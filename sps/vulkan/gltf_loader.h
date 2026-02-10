@@ -110,6 +110,15 @@ struct SceneMaterial
   float iridescenceIor{1.3f};
   float iridescenceThicknessMin{100.0f};
   float iridescenceThicknessMax{400.0f};
+
+  // KHR_materials_volume
+  std::unique_ptr<Texture> thicknessTexture;
+  float thicknessFactor{0.0f};
+  glm::vec3 attenuationColor{1.0f};
+  float attenuationDistance{0.0f};  // 0 = infinite (no attenuation)
+
+  // KHR_materials_transmission (proxy for diffuse_transmission)
+  float transmissionFactor{0.0f};
 };
 
 /// @brief Complete scene with merged geometry and per-primitive materials.

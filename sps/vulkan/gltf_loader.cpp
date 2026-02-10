@@ -1065,18 +1065,32 @@ void traverse_nodes(
             scene_mat.iridescenceThicknessMax = irid.iridescence_thickness_max;
           }
 
-          // HACK: Approximate KHR_materials_transmission as alpha blend.
-          // Proper transmission requires a separate render pass that samples
-          // the opaque scene behind the transmissive surface (future: glass stage).
-          if (primitive.material->has_transmission &&
-              scene_mat.alphaMode == AlphaMode::Opaque)
+          // KHR_materials_transmission
+          if (primitive.material->has_transmission)
           {
-            float t = primitive.material->transmission.transmission_factor;
-            if (t > 0.0f)
-            {
-              scene_mat.alphaMode = AlphaMode::Blend;
-              scene_mat.baseColorFactor.a = 1.0f - t;
-            }
+            scene_mat.transmissionFactor =
+              primitive.material->transmission.transmission_factor;
+          }
+
+          // KHR_materials_diffuse_transmission is not in cgltf, but if volume
+          // data is present without explicit transmission, treat as fully transmissive
+          // (ScatteringSkull uses diffuse_transmission which cgltf can't parse)
+          if (primitive.material->has_volume && scene_mat.transmissionFactor == 0.0f
+              && primitive.material->volume.thickness_factor > 0.0f)
+          {
+            scene_mat.transmissionFactor = 1.0f;
+          }
+
+          // KHR_materials_volume
+          if (primitive.material->has_volume)
+          {
+            const auto& vol = primitive.material->volume;
+            scene_mat.thicknessFactor = vol.thickness_factor;
+            scene_mat.thicknessTexture = extract_texture(
+              vol.thickness_texture, device, base_path, "thickness", true);
+            scene_mat.attenuationColor = glm::vec3(
+              vol.attenuation_color[0], vol.attenuation_color[1], vol.attenuation_color[2]);
+            scene_mat.attenuationDistance = vol.attenuation_distance;
           }
 
           materials.push_back(std::move(scene_mat));

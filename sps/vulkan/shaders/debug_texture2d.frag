@@ -23,6 +23,12 @@ layout(set = 0, binding = 2) uniform sampler2D normalTexture;
 layout(set = 0, binding = 3) uniform sampler2D metallicRoughnessTexture;
 layout(set = 0, binding = 4) uniform sampler2D emissiveTexture;
 layout(set = 0, binding = 5) uniform sampler2D aoTexture;
+layout(set = 0, binding = 6) uniform sampler2D brdfLUT;
+layout(set = 0, binding = 7) uniform samplerCube irradianceMap;
+layout(set = 0, binding = 8) uniform samplerCube prefilterMap;
+layout(set = 0, binding = 9) uniform sampler2D iridescenceTexture;
+layout(set = 0, binding = 10) uniform sampler2D iridescenceThicknessTexture;
+layout(set = 0, binding = 11) uniform sampler2D thicknessTexture;
 
 layout(location = 0) in vec2 fragTexCoord;
 layout(location = 0) out vec4 outColor;
@@ -50,6 +56,12 @@ void main()
     texColor = texture(emissiveTexture, uv);
   } else if (textureIndex == 4) {
     texColor = texture(aoTexture, uv);
+  } else if (textureIndex == 5) {
+    texColor = texture(iridescenceTexture, uv);
+  } else if (textureIndex == 6) {
+    texColor = texture(iridescenceThicknessTexture, uv);
+  } else if (textureIndex == 7) {
+    texColor = texture(thicknessTexture, uv);
   } else {
     texColor = vec4(1.0, 0.0, 1.0, 1.0);  // Magenta for invalid
   }

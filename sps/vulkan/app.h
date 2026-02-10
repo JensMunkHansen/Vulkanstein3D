@@ -49,7 +49,7 @@ struct UniformBufferObject
   glm::vec4
     material; // offset 320, size 16 (x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength)
   glm::vec4 flags;      // offset 336, size 16 (x=useNormalMap, y=useEmissive, z=useAO, w=exposure)
-  glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=tonemapMode, w=reserved)
+  glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=tonemapMode, w=useSSS)
 };
 
 class Application : public VulkanRenderer
@@ -98,6 +98,10 @@ public:
   void wait_idle();
   void update_frame(); // Call process_input + update_uniform_buffer
 
+  // Light type: 0=off, 1=point, 2=directional
+  int light_type() const;
+  void set_light_type(int type);
+
   // Mutable accessors for UI controls
   Light& light() { return *m_light; }
   float& shininess() { return m_shininess; }
@@ -109,6 +113,7 @@ public:
   bool& use_normal_mapping() { return m_use_normal_mapping; }
   bool& use_emissive() { return m_use_emissive; }
   bool& use_ao() { return m_use_ao; }
+  bool& use_sss() { return m_use_sss; }
   bool& use_ibl() { return m_use_ibl; }
   float ibl_intensity() const { return m_scene_manager->ibl_intensity(); }
   void set_ibl_intensity(float v) { m_scene_manager->set_ibl_intensity(v); }
@@ -163,7 +168,7 @@ public:
     m_debug_2d_pan = glm::vec2(0.0f);
   }
   static constexpr const char* texture_names[] = { "Base Color", "Normal", "Metal/Rough",
-    "Emissive", "AO" };
+    "Emissive", "AO", "Iridescence", "Irid. Thickness", "Thickness" };
   static constexpr const char* channel_names[] = { "RGB", "R", "G", "B", "A" };
 
   // Call after ImGui to sync uniforms before render
@@ -265,6 +270,7 @@ private:
   vk::DescriptorSet m_rt_descriptor_set{ VK_NULL_HANDLE };
 
   // Lighting
+  bool m_light_enabled{ true };
   std::unique_ptr<Light> m_light;
   float m_shininess{ 32.0f };
   float m_specularStrength{ 0.4f };
@@ -284,6 +290,7 @@ private:
   bool m_use_normal_mapping = true; // Normal mapping enabled by default
   bool m_use_emissive = true;       // Emissive texture enabled by default
   bool m_use_ao = true;             // Ambient occlusion enabled by default
+  bool m_use_sss = true;            // Subsurface scattering enabled by default
   bool m_use_ibl = true;            // IBL enabled by default
   int m_tonemap_mode =
     5; // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR

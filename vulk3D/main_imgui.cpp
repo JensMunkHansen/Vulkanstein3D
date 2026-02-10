@@ -162,6 +162,7 @@ int main(int argc, char* argv[])
         ImGui::Checkbox("Normal Mapping", &app.use_normal_mapping());
         ImGui::Checkbox("Emissive", &app.use_emissive());
         ImGui::Checkbox("Ambient Occlusion", &app.use_ao());
+        ImGui::Checkbox("Subsurface Scattering", &app.use_sss());
 
         ImGui::Separator();
         ImGui::Checkbox("IBL Environment", &app.use_ibl());
@@ -224,34 +225,52 @@ int main(int argc, char* argv[])
 
     if (ImGui::CollapsingHeader("Light"))
     {
-      Light& light = app.light();
-
-      // Try to get position from PointLight
-      if (auto* point_light = dynamic_cast<PointLight*>(&light))
+      static const char* light_type_names[] = { "Off", "Point", "Directional" };
+      int lt = app.light_type();
+      if (ImGui::Combo("Type", &lt, light_type_names, 3))
       {
-        glm::vec3 pos = point_light->position();
-        if (ImGui::DragFloat3("Position", &pos.x, 0.1f, -10.0f, 10.0f))
+        app.set_light_type(lt);
+      }
+
+      if (lt > 0)
+      {
+        Light& light = app.light();
+
+        if (auto* point_light = dynamic_cast<PointLight*>(&light))
         {
-          point_light->set_position(pos);
+          glm::vec3 pos = point_light->position();
+          if (ImGui::DragFloat3("Position", &pos.x, 0.1f, -10.0f, 10.0f))
+          {
+            point_light->set_position(pos);
+          }
         }
-      }
+        else if (auto* dir_light = dynamic_cast<DirectionalLight*>(&light))
+        {
+          glm::vec3 dir = dir_light->direction();
+          if (ImGui::SliderFloat3("Direction", &dir.x, -1.0f, 1.0f))
+          {
+            if (glm::length(dir) > 0.001f)
+              dir_light->set_direction(dir);
+          }
+        }
 
-      glm::vec3 color = light.color();
-      if (ImGui::ColorEdit3("Color", &color.x))
-      {
-        light.set_color(color);
-      }
+        glm::vec3 color = light.color();
+        if (ImGui::ColorEdit3("Color", &color.x))
+        {
+          light.set_color(color);
+        }
 
-      float intensity = light.intensity();
-      if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 5.0f))
-      {
-        light.set_intensity(intensity);
-      }
+        float intensity = light.intensity();
+        if (ImGui::SliderFloat("Intensity", &intensity, 0.0f, 5.0f))
+        {
+          light.set_intensity(intensity);
+        }
 
-      glm::vec3 ambient = light.ambient();
-      if (ImGui::ColorEdit3("Ambient", &ambient.x))
-      {
-        light.set_ambient(ambient);
+        glm::vec3 ambient = light.ambient();
+        if (ImGui::ColorEdit3("Ambient", &ambient.x))
+        {
+          light.set_ambient(ambient);
+        }
       }
     }
 
@@ -273,9 +292,7 @@ int main(int argc, char* argv[])
 
     if (ImGui::CollapsingHeader("Shaders"))
     {
-      // Only show 3D shaders (not 2D texture view)
-      constexpr int shader_3d_count = SHADER_2D_TEXTURE;
-      if (ImGui::Combo("Shader", &current_shader, shader_names, shader_3d_count))
+      if (ImGui::Combo("Shader", &current_shader, shader_names, SHADER_3D_COUNT, SHADER_3D_COUNT))
       {
         app.reload_shaders(vertex_shaders[current_shader], fragment_shaders[current_shader]);
       }

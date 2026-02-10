@@ -39,6 +39,9 @@ layout(set = 0, binding = 8) uniform samplerCube prefilterMap;    // Specular IB
 layout(set = 0, binding = 9) uniform sampler2D iridescenceTexture;           // R=factor mask
 layout(set = 0, binding = 10) uniform sampler2D iridescenceThicknessTexture; // G=thickness
 
+// Subsurface scattering textures
+layout(set = 0, binding = 11) uniform sampler2D thicknessTexture;            // G=thickness (KHR_materials_volume)
+
 // Push constant for per-draw material properties
 layout(push_constant) uniform PushConstants {
   mat4 model;                  // 64 bytes (vertex stage)
@@ -50,7 +53,11 @@ layout(push_constant) uniform PushConstants {
   float iridescenceFactor;     //  4 bytes
   float iridescenceIor;        //  4 bytes
   float iridescenceThicknessMin; // 4 bytes
-  float iridescenceThicknessMax; // 4 bytes  (total: 112)
+  float iridescenceThicknessMax; // 4 bytes
+  float transmissionFactor;      // 4 bytes
+  float thicknessFactor;         // 4 bytes
+  uint attenuationColorPacked;   // 4 bytes  R8G8B8 packed unorm
+  float attenuationDistance;     // 4 bytes  (total: 128)
 } pc;
 
 layout(location = 0) in vec3 fragColor;
@@ -130,6 +137,22 @@ float BRDF_specularGGX(float alphaRoughness, float NdotL, float NdotV, float Ndo
   float D = D_GGX(NdotH, alphaRoughness);
   return V * D;
 }
+
+// ============================================================================
+// Subsurface Scattering (Barré-Brisebois & Bouchard, GDC 2011)
+// ============================================================================
+
+// Unpack R8G8B8 color from uint32
+vec3 unpackColor(uint packed)
+{
+  return vec3(
+    float(packed & 0xFFu) / 255.0,
+    float((packed >> 8u) & 0xFFu) / 255.0,
+    float((packed >> 16u) & 0xFFu) / 255.0
+  );
+}
+
+
 
 // ============================================================================
 // IBL Functions (matching glTF-Sample-Viewer)
@@ -310,6 +333,26 @@ void main()
 
   // Final direct lighting contribution
   vec3 Lo = brdf * radiance * NdotL;
+
+  // Subsurface translucency (Barré-Brisebois back-lighting)
+  bool useSSS = ubo.ibl_params.w > 0.5;
+  if (useSSS && pc.transmissionFactor > 0.0) {
+    // Thickness texture is in [0,1], thicknessFactor scales to world units
+    float thickness = texture(thicknessTexture, fragTexCoord).g * pc.thicknessFactor;
+    // Exponential falloff: even thick areas transmit some light
+    float transmission = exp(-thickness * 3.0);
+    vec3 attColor = unpackColor(pc.attenuationColorPacked);
+
+    // Barré-Brisebois wrap lighting
+    const float distortion = 0.2;
+    const float power = 4.0;
+    vec3 scatteredL = L + N * distortion;
+    float backLight = pow(clamp(dot(V, -scatteredL), 0.0, 1.0), power);
+
+    // Attenuation color tints the scattered light
+    vec3 sss = attColor * backLight * transmission;
+    Lo += sss * albedo * radiance * pc.transmissionFactor;
+  }
 
   // Get material parameters from uniforms
   float metallicAmbient = ubo.material.z;  // Fake IBL strength for metals

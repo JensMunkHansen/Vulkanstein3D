@@ -56,6 +56,11 @@ void SceneManager::create_defaults(const std::string& hdr_file)
   m_defaultIridescenceThickness = std::make_unique<Texture>(
     m_device, "default iridescence thickness", default_iridescence_thickness, 1, 1, true);
 
+  // Create default 1x1 thickness texture (white = factor passthrough)
+  const uint8_t default_thickness[] = { 255, 255, 255, 255 };
+  m_defaultThickness =
+    std::make_unique<Texture>(m_device, "default thickness", default_thickness, 1, 1, true);
+
   // Create IBL from HDR environment map
   try
   {
@@ -182,6 +187,10 @@ void SceneManager::create_descriptors(vk::Buffer uniform_buffer)
   builder.add_combined_image_sampler(m_defaultIridescenceThickness->image_view(),
     m_defaultIridescenceThickness->sampler(), 10, vk::ShaderStageFlagBits::eFragment);
 
+  // Thickness texture (binding 11)
+  builder.add_combined_image_sampler(m_defaultThickness->image_view(),
+    m_defaultThickness->sampler(), 11, vk::ShaderStageFlagBits::eFragment);
+
   m_descriptor = std::make_unique<ResourceDescriptor>(builder.build("camera descriptor"));
   spdlog::trace("Created descriptor with PBR texture bindings + IBL");
 
@@ -238,6 +247,12 @@ void SceneManager::create_descriptors(vk::Buffer uniform_buffer)
         matIridescence->sampler(), 9, vk::ShaderStageFlagBits::eFragment);
       mat_builder.add_combined_image_sampler(matIridescenceThickness->image_view(),
         matIridescenceThickness->sampler(), 10, vk::ShaderStageFlagBits::eFragment);
+
+      // Thickness texture (binding 11)
+      Texture* matThickness =
+        mat.thicknessTexture ? mat.thicknessTexture.get() : m_defaultThickness.get();
+      mat_builder.add_combined_image_sampler(matThickness->image_view(),
+        matThickness->sampler(), 11, vk::ShaderStageFlagBits::eFragment);
 
       m_material_descriptors.push_back(
         std::make_unique<ResourceDescriptor>(mat_builder.build("material_" + std::to_string(i))));

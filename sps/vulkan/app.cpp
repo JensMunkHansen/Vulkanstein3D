@@ -892,9 +892,18 @@ void Application::update_uniform_buffer()
   ubo.projInverse = glm::inverse(ubo.proj);
 
   // Light setup from light object
-  ubo.lightPosition = m_light->position_or_direction();
-  ubo.lightColor = m_light->color_with_intensity();
-  ubo.lightAmbient = m_light->ambient_vec4();
+  if (m_light_enabled)
+  {
+    ubo.lightPosition = m_light->position_or_direction();
+    ubo.lightColor = m_light->color_with_intensity();
+    ubo.lightAmbient = m_light->ambient_vec4();
+  }
+  else
+  {
+    ubo.lightPosition = glm::vec4(0.0f);
+    ubo.lightColor = glm::vec4(0.0f);
+    ubo.lightAmbient = glm::vec4(0.0f);
+  }
 
   // Camera position for specular calculation
   ubo.viewPos = glm::vec4(m_camera.position(), 1.0f);
@@ -922,9 +931,9 @@ void Application::update_uniform_buffer()
     ubo.flags = glm::vec4(m_use_normal_mapping ? 1.0f : 0.0f, m_use_emissive ? 1.0f : 0.0f,
       m_use_ao ? 1.0f : 0.0f, m_exposure);
 
-    // IBL parameters: x=useIBL, y=intensity, z=tonemapMode, w=reserved
+    // IBL parameters: x=useIBL, y=intensity, z=tonemapMode, w=useSSS
     ubo.ibl_params = glm::vec4(m_use_ibl ? 1.0f : 0.0f, m_scene_manager->ibl_intensity(),
-      static_cast<float>(m_tonemap_mode), 0.0f);
+      static_cast<float>(m_tonemap_mode), m_use_sss ? 1.0f : 0.0f);
   }
 
   m_uniform_buffer->update(ubo);
@@ -1388,9 +1397,10 @@ void Application::make_pipeline(
   specification.msaaSamples = m_msaaSamples;
 
   // Push constant: model(64) + baseColorFactor(16) + metallicFactor(4) + roughnessFactor(4) + alphaCutoff(4) + alphaMode(4)
-  //   + iridescenceFactor(4) + iridescenceIor(4) + iridescenceThicknessMin(4) + iridescenceThicknessMax(4) = 112 bytes
+  //   + iridescenceFactor(4) + iridescenceIor(4) + iridescenceThicknessMin(4) + iridescenceThicknessMax(4)
+  //   + transmissionFactor(4) + thicknessFactor(4) + attenuationColorPacked(4) + attenuationDistance(4) = 128 bytes
   vk::PushConstantRange pcRange{
-    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 112
+    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 128
   };
   specification.pushConstantRanges = { pcRange };
 
@@ -1825,6 +1835,58 @@ void Application::load_hdr(int index)
   m_current_hdr_index = index;
 }
 
+int Application::light_type() const
+{
+  if (!m_light_enabled)
+    return 0;
+  if (dynamic_cast<DirectionalLight*>(m_light.get()))
+    return 2;
+  return 1; // PointLight (default)
+}
+
+void Application::set_light_type(int type)
+{
+  // Preserve common properties
+  glm::vec3 color = m_light->color();
+  float intensity = m_light->intensity();
+  glm::vec3 ambient = m_light->ambient();
+
+  if (type == 0)
+  {
+    // Off — keep existing light but disable it
+    m_light_enabled = false;
+    return;
+  }
+
+  m_light_enabled = true;
+
+  if (type == 2)
+  {
+    // Directional
+    auto dir_light = std::make_unique<DirectionalLight>();
+    // If switching from point, use position as direction hint
+    if (auto* point = dynamic_cast<PointLight*>(m_light.get()))
+      dir_light->set_direction(glm::normalize(point->position()));
+    else if (auto* old_dir = dynamic_cast<DirectionalLight*>(m_light.get()))
+      dir_light->set_direction(old_dir->direction());
+    m_light = std::move(dir_light);
+  }
+  else
+  {
+    // Point
+    auto point_light = std::make_unique<PointLight>();
+    if (auto* old_dir = dynamic_cast<DirectionalLight*>(m_light.get()))
+      point_light->set_position(old_dir->direction() * 3.0f);
+    else if (auto* old_point = dynamic_cast<PointLight*>(m_light.get()))
+      point_light->set_position(old_point->position());
+    m_light = std::move(point_light);
+  }
+
+  m_light->set_color(color);
+  m_light->set_intensity(intensity);
+  m_light->set_ambient(ambient);
+}
+
 void Application::apply_shader_mode(int mode)
 {
   // Must match main_imgui.cpp shader arrays
@@ -1836,7 +1898,9 @@ void Application::apply_shader_mode(int mode)
     SHADER_DIR "vertex.spv",  // Debug Base Color
     SHADER_DIR "vertex.spv",  // Debug Metallic/Roughness
     SHADER_DIR "vertex.spv",  // Debug AO
-    SHADER_DIR "vertex.spv"   // Debug Emissive
+    SHADER_DIR "vertex.spv",  // Debug Emissive
+    SHADER_DIR "vertex.spv",  // Debug Thickness
+    SHADER_DIR "vertex.spv"   // Debug SSS
   };
   static const char* fragment_shaders[] = {
     SHADER_DIR "fragment.spv",
@@ -1846,7 +1910,9 @@ void Application::apply_shader_mode(int mode)
     SHADER_DIR "debug_basecolor.spv",
     SHADER_DIR "debug_metallic_roughness.spv",
     SHADER_DIR "debug_ao.spv",
-    SHADER_DIR "debug_emissive.spv"
+    SHADER_DIR "debug_emissive.spv",
+    SHADER_DIR "debug_thickness.spv",
+    SHADER_DIR "debug_sss.spv"
   };
 
   constexpr int num_shaders = sizeof(fragment_shaders) / sizeof(fragment_shaders[0]);

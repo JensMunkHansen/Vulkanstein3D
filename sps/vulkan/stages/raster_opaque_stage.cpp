@@ -10,7 +10,7 @@ namespace sps::vulkan
 
 void RasterOpaqueStage::record(const FrameContext& ctx)
 {
-  // Push constant struct matching shader layout (112 bytes)
+  // Push constant struct matching shader layout (128 bytes)
   struct PushConstants
   {
     glm::mat4 model;
@@ -23,6 +23,10 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
     float iridescenceIor;
     float iridescenceThicknessMin;
     float iridescenceThicknessMax;
+    float transmissionFactor;
+    float thicknessFactor;
+    uint32_t attenuationColorPacked;
+    float attenuationDistance;
   } pc{};
 
   if (!ctx.mesh)
@@ -57,6 +61,13 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
       pc.iridescenceIor = mat.iridescenceIor;
       pc.iridescenceThicknessMin = mat.iridescenceThicknessMin;
       pc.iridescenceThicknessMax = mat.iridescenceThicknessMax;
+      pc.transmissionFactor = mat.transmissionFactor;
+      pc.thicknessFactor = mat.thicknessFactor;
+      pc.attenuationColorPacked =
+        (uint32_t(glm::clamp(mat.attenuationColor.r, 0.0f, 1.0f) * 255.0f) << 0) |
+        (uint32_t(glm::clamp(mat.attenuationColor.g, 0.0f, 1.0f) * 255.0f) << 8) |
+        (uint32_t(glm::clamp(mat.attenuationColor.b, 0.0f, 1.0f) * 255.0f) << 16);
+      pc.attenuationDistance = mat.attenuationDistance;
 
       ctx.command_buffer.pushConstants(ctx.pipeline_layout,
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
