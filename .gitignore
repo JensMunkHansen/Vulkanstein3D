@@ -33,6 +33,15 @@
 build/
 *~
 .cache
-*.spv 
+*.spv
 /**/#*
 /**/.#*
+
+# Khronos assets fetched at configure time (see FetchAssets.cmake)
+data/DamagedHelmet/
+data/CompareMetallic/
+data/AlphaBlendModeTest/
+data/IridescenceMetallicSpheres/
+data/ScatteringSkull/
+data/neutral.hdr
+data/footprint_court.hdr

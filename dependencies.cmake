@@ -8,15 +8,6 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
-# Ensure Git LFS files are pulled for this repository
-find_program(GIT_LFS git-lfs)
-if(GIT_LFS)
-  execute_process(
-    COMMAND ${GIT_LFS} pull
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  )
-endif()
-
 # --- Options for using system-installed packages ---
 option(VULK3D_USE_SYSTEM_VMA    "Use system-installed VulkanMemoryAllocator" ON)
 option(VULK3D_USE_SYSTEM_SPDLOG "Use system-installed spdlog"               ON)

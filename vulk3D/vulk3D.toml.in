@@ -44,10 +44,7 @@ hdr_file = "@DATA_DIR@/neutral.hdr"
 ply_file = "@DATA_DIR@/VertexColorLowerJawScan.ply"
 
 # Path to glTF file (used when source = "gltf")
-gltf_file = "@DATA_DIR@/DamagedHelmet/DamagedHelmet.glb"
-# gltf_file = "@DATA_DIR@/CompareMetallic/glTF/CompareMetallic.gltf"
-#gltf_file = "@DATA_DIR@/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf"
-#gltf_file = "@DATA_DIR@/CarConcept/glTF/CarConcept.gltf"
+gltf_file = "@DATA_DIR@/DamagedHelmet/glTF-Binary/DamagedHelmet.glb"
 
 [application.lighting]
 # Light type: "directional", "point", or "area"
@@ -106,18 +103,17 @@ files = [
 # https://www.khronos.org/gltf/
 [glTFmodels]
 files = [
-      "@DATA_DIR@/DamagedHelmet/DamagedHelmet.glb",
-      "@DATA_DIR@/CompareMetallic/glTF/CompareMetallic.gltf",
-      "@DATA_DIR@/AlphaBlendModeTest/glTF/AlphaBlendModeTest.gltf",
+      "@DATA_DIR@/DamagedHelmet/glTF-Binary/DamagedHelmet.glb",
+      "@DATA_DIR@/CompareMetallic/glTF-Binary/CompareMetallic.glb",
+      "@DATA_DIR@/AlphaBlendModeTest/glTF-Binary/AlphaBlendModeTest.glb",
       "@DATA_DIR@/IridescenceMetallicSpheres/glTF/IridescenceMetallicSpheres.gltf",
-      "@DATA_DIR@/ScatteringSkull/glTF/ScatteringSkull.gltf",
+      "@DATA_DIR@/ScatteringSkull/glTF-Binary/ScatteringSkull.glb",
 ]
 
 [HDRenvironments]
 files = [
       "@DATA_DIR@/neutral.hdr",
       "@DATA_DIR@/footprint_court.hdr",
-      "@DATA_DIR@/lightroom_14b.hdr",
 ]
 
 [IBL]

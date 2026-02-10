@@ -22,6 +22,9 @@ include(CMakeDependentOption)
 # Download dependencies through CMake
 include(dependencies.cmake)
 
+# Fetch Khronos glTF sample assets (models + HDR environments)
+include(FetchAssets.cmake)
+
 project(Vulkanstein3D
   VERSION 1.0
   DESCRIPTION "Vulkanstein3D is an open-source 2D rendering engine written in C/C++"

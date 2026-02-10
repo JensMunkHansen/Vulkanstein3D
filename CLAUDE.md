@@ -72,6 +72,9 @@ Add a post-lighting compute or fullscreen-quad pass that blurs diffuse lighting 
 - Would be a new render graph stage (`SSSBlurStage`) after the opaque lighting pass
 - Reference: `~/github/Rendering/AdvancedVulkanDemos/em_assets/shaders/scene_subsurface_scattering/SubSurfaceScatteringIrradianceFrag.glsl`
 
+## TODO: Fetch glTF assets from Khronos at build time
+Instead of storing model data (ScatteringSkull, DamagedHelmet, etc.) in the repo via LFS, use CMake `FetchContent` or a download script to pull them from the [glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) repo. Same approach could work for HDR environments from [glTF-Sample-Environments](https://github.com/KhronosGroup/glTF-Sample-Environments). Keeps the repo leaner.
+
 ## TODO: Refactor `app.cpp` (~2050 lines)
 
 ### 1. TOML Config → `AppConfig` struct (~230 lines)
