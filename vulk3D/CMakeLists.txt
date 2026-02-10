@@ -15,10 +15,16 @@ if(_isMultiConfig)
   file(RELATIVE_PATH DATA_DIR
     "${CMAKE_BINARY_DIR}/Release/${CMAKE_INSTALL_BINDIR}"
     "${CMAKE_SOURCE_DIR}/data")
+  file(RELATIVE_PATH LOCAL_DATA_DIR
+    "${CMAKE_BINARY_DIR}/Release/${CMAKE_INSTALL_BINDIR}"
+    "${CMAKE_SOURCE_DIR}/localdata")
 else()
   file(RELATIVE_PATH DATA_DIR
     "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_BINDIR}"
     "${CMAKE_SOURCE_DIR}/data")
+  file(RELATIVE_PATH LOCAL_DATA_DIR
+    "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_BINDIR}"
+    "${CMAKE_SOURCE_DIR}/localdata")
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/vulk3D.toml.in"

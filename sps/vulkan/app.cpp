@@ -31,7 +31,6 @@
 #include <sps/vulkan/stages/ui_stage.h>
 
 #include <spdlog/spdlog.h>
-#include <toml.hpp>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -39,24 +38,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
-
-namespace
-{
-inline constexpr auto hash_djb2a(const std::string_view sv)
-{
-  unsigned long hash{ 5381 };
-  for (unsigned char c : sv)
-  {
-    hash = ((hash << 5) + hash) ^ c;
-  }
-  return hash;
-}
-
-inline constexpr auto operator"" _sh(const char* str, size_t len)
-{
-  return hash_djb2a(std::string_view{ str, len });
-}
-}
 
 namespace sps::vulkan
 {
@@ -78,7 +59,7 @@ Application::Application(int argc, char** argv)
     "Engine version: {}.{}.{}", ENGINE_VERSION[0], ENGINE_VERSION[1], ENGINE_VERSION[2]);
 
   // Load the configuration from the TOML file.
-  load_toml_configuration_file("./vulk3D.toml");
+  apply_config(parse_toml("./vulk3D.toml"));
 
   auto enable_renderdoc = cla_parser.arg<bool>("--renderdoc");
   if (enable_renderdoc)
@@ -304,235 +285,28 @@ Application::Application(int argc, char** argv)
   glfwSetScrollCallback(m_window->get(), scroll_callback);
 }
 
-void Application::load_toml_configuration_file(const std::string& file_name)
+void Application::apply_config(AppConfig config)
 {
-  spdlog::trace("Loading TOML configuration file: {}", file_name);
-
-  std::ifstream toml_file(file_name, std::ios::in);
-  if (!toml_file)
-  {
-    // If you are using CLion, go to "Edit Configurations" and select "Working Directory".
-    throw std::runtime_error("Could not find configuration file: " + file_name +
-      "! You must set the working directory properly in your IDE");
-  }
-
-  toml_file.close();
-
-  // Load the TOML file using toml11.
-  auto renderer_configuration = toml::parse(file_name);
-
-  // Search for the title of the configuration file and print it to debug output.
-  const auto& configuration_title = toml::find<std::string>(renderer_configuration, "title");
-  spdlog::trace("Title: {}", configuration_title);
-
-  // Vulkan settings
-  m_preferred_gpu =
-    toml::find_or<std::string>(renderer_configuration, "vulkan", "preferred_gpu", "");
-  if (!m_preferred_gpu.empty())
-  {
-    spdlog::info("Preferred GPU from config: {}", m_preferred_gpu);
-  }
-
-  using WindowMode = sps::vulkan::Window::Mode;
-  const auto& wmodestr =
-    toml::find<std::string>(renderer_configuration, "application", "window", "mode");
-
-#if 1
-  switch (hash_djb2a(wmodestr))
-  {
-    case "windowed"_sh:
-      m_window_mode = WindowMode::WINDOWED;
-      break;
-    case "windowed_fullscreen"_sh:
-      m_window_mode = WindowMode::WINDOWED_FULLSCREEN;
-      break;
-    case "fullscreen"_sh:
-      m_window_mode = WindowMode::FULLSCREEN;
-      break;
-    default:
-      spdlog::warn("Invalid application window mode: {}", wmodestr);
-      m_window_mode = WindowMode::WINDOWED;
-  }
-#else
-  if (wmodestr == "windowed")
-  {
-    m_window_mode = WindowMode::WINDOWED;
-  }
-  else if (wmodestr == "windowed_fullscreen")
-  {
-    m_window_mode = WindowMode::WINDOWED_FULLSCREEN;
-  }
-  else if (wmodestr == "fullscreen")
-  {
-    m_window_mode = WindowMode::FULLSCREEN;
-  }
-  else
-  {
-    spdlog::warn("Invalid application window mode: {}", wmodestr);
-    m_window_mode = WindowMode::WINDOWED;
-  }
-#endif
-
-  m_window_width = toml::find<int>(renderer_configuration, "application", "window", "width");
-  m_window_height = toml::find<int>(renderer_configuration, "application", "window", "height");
-  m_window_title = toml::find<std::string>(renderer_configuration, "application", "window", "name");
-  spdlog::trace("Window: {}, {} x {}", m_window_title, m_window_width, m_window_height);
-
-  // Rendering options
-  m_backfaceCulling = toml::find_or<bool>(
-    renderer_configuration, "application", "rendering", "backface_culling", true);
-  spdlog::trace("Backface culling: {}", m_backfaceCulling);
-
-  // MSAA sample count (will be clamped to device max after device creation)
-  {
-    int msaa_config = toml::find_or<int>(
-      renderer_configuration, "application", "rendering", "msaa_samples", 4);
-    // Convert integer to SampleCountFlagBits
-    switch (msaa_config)
-    {
-      case 2: m_msaaSamples = vk::SampleCountFlagBits::e2; break;
-      case 4: m_msaaSamples = vk::SampleCountFlagBits::e4; break;
-      case 8: m_msaaSamples = vk::SampleCountFlagBits::e8; break;
-      case 16: m_msaaSamples = vk::SampleCountFlagBits::e16; break;
-      default: m_msaaSamples = vk::SampleCountFlagBits::e1; break;
-    }
-    spdlog::trace("MSAA samples (config): {}", msaa_config);
-  }
-
-  // Rendering mode (raytracing or rasterization)
-  auto render_mode = toml::find_or<std::string>(
-    renderer_configuration, "application", "rendering", "mode", "rasterization");
-  m_use_raytracing = (render_mode == "raytracing");
-  spdlog::trace("Rendering mode: {}", render_mode);
-
-  // Geometry options
-  m_geometry_source = toml::find_or<std::string>(
-    renderer_configuration, "application", "geometry", "source", "triangle");
-  m_ply_file = toml::find_or<std::string>(
-    renderer_configuration, "application", "geometry", "ply_file", "");
-  m_gltf_file = toml::find_or<std::string>(
-    renderer_configuration, "application", "geometry", "gltf_file", "");
-  m_hdr_file = toml::find_or<std::string>(
-    renderer_configuration, "application", "geometry", "hdr_file", "");
-  spdlog::trace("Geometry source: {}, PLY file: {}, glTF file: {}", m_geometry_source, m_ply_file, m_gltf_file);
-
-  // glTF model list (for runtime switching)
-  if (renderer_configuration.contains("glTFmodels"))
-  {
-    const auto& gltf_section = toml::find(renderer_configuration, "glTFmodels");
-    m_gltf_models = toml::find_or<std::vector<std::string>>(gltf_section, "files", {});
-  }
-  // Set current index if the active gltf_file is in the list
-  for (int i = 0; i < static_cast<int>(m_gltf_models.size()); ++i)
-  {
-    if (m_gltf_models[i] == m_gltf_file)
-    {
-      m_current_model_index = i;
-      break;
-    }
-  }
-  spdlog::trace("glTF model list: {} entries, current index: {}", m_gltf_models.size(), m_current_model_index);
-
-  // HDR environment list (for runtime switching)
-  if (renderer_configuration.contains("HDRenvironments"))
-  {
-    const auto& hdr_section = toml::find(renderer_configuration, "HDRenvironments");
-    m_hdr_files = toml::find_or<std::vector<std::string>>(hdr_section, "files", {});
-  }
-  for (int i = 0; i < static_cast<int>(m_hdr_files.size()); ++i)
-  {
-    if (m_hdr_files[i] == m_hdr_file)
-    {
-      m_current_hdr_index = i;
-      break;
-    }
-  }
-  spdlog::trace("HDR environment list: {} entries, current index: {}", m_hdr_files.size(), m_current_hdr_index);
-
-  // IBL settings
-  if (renderer_configuration.contains("IBL"))
-  {
-    const auto& ibl_section = toml::find(renderer_configuration, "IBL");
-    m_ibl_settings.resolution = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "resolution", 256));
-    m_ibl_settings.irradiance_samples = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "irradiance_samples", 2048));
-    m_ibl_settings.prefilter_samples = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "prefilter_samples", 2048));
-    m_ibl_settings.brdf_samples = static_cast<uint32_t>(toml::find_or<int>(ibl_section, "brdf_samples", 1024));
-  }
-  spdlog::info("IBL settings: resolution={}, irradiance_samples={}, prefilter_samples={}, brdf_samples={}",
-    m_ibl_settings.resolution, m_ibl_settings.irradiance_samples,
-    m_ibl_settings.prefilter_samples, m_ibl_settings.brdf_samples);
-
-  // Lighting options
-  try
-  {
-    const auto& lighting = toml::find(renderer_configuration, "application", "lighting");
-
-    auto light_type = toml::find<std::string>(lighting, "light_type");
-    auto light_color = toml::find<std::vector<double>>(lighting, "light_color");
-    auto light_intensity = static_cast<float>(toml::find<double>(lighting, "light_intensity"));
-    auto ambient_color = toml::find<std::vector<double>>(lighting, "ambient_color");
-
-    m_shininess = static_cast<float>(toml::find<double>(lighting, "shininess"));
-    m_specularStrength = static_cast<float>(toml::find<double>(lighting, "specular_strength"));
-
-    // Create appropriate light type
-    if (light_type == "directional")
-    {
-      auto light_dir = toml::find<std::vector<double>>(lighting, "light_direction");
-      auto light = std::make_unique<DirectionalLight>();
-      if (light_dir.size() >= 3)
-      {
-        light->set_direction(static_cast<float>(light_dir[0]), static_cast<float>(light_dir[1]),
-          static_cast<float>(light_dir[2]));
-      }
-      m_light = std::move(light);
-    }
-    else if (light_type == "point")
-    {
-      auto light_dir = toml::find<std::vector<double>>(lighting, "light_direction");
-      auto light = std::make_unique<PointLight>();
-      if (light_dir.size() >= 3)
-      {
-        light->set_position(static_cast<float>(light_dir[0]), static_cast<float>(light_dir[1]),
-          static_cast<float>(light_dir[2]));
-      }
-      m_light = std::move(light);
-    }
-    else
-    {
-      // Default to point light
-      auto light_dir =
-        toml::find_or<std::vector<double>>(lighting, "light_direction", { 0.0, 0.0, 0.0 });
-      auto light = std::make_unique<PointLight>();
-      if (light_dir.size() >= 3)
-      {
-        light->set_position(static_cast<float>(light_dir[0]), static_cast<float>(light_dir[1]),
-          static_cast<float>(light_dir[2]));
-      }
-      m_light = std::move(light);
-    }
-
-    // Set common properties
-    if (light_color.size() >= 3)
-    {
-      m_light->set_color(static_cast<float>(light_color[0]), static_cast<float>(light_color[1]),
-        static_cast<float>(light_color[2]));
-    }
-    m_light->set_intensity(light_intensity);
-    if (ambient_color.size() >= 3)
-    {
-      m_light->set_ambient(static_cast<float>(ambient_color[0]),
-        static_cast<float>(ambient_color[1]), static_cast<float>(ambient_color[2]));
-    }
-
-    spdlog::trace("Light type: {}", light_type);
-    spdlog::trace("Shininess: {}, Specular strength: {}", m_shininess, m_specularStrength);
-  }
-  catch (const std::out_of_range&)
-  {
-    spdlog::trace("No lighting configuration found, using defaults");
-    m_light = std::make_unique<DirectionalLight>(glm::vec3(0.3f, 0.5f, 1.0f));
-  }
+  m_preferred_gpu = std::move(config.preferred_gpu);
+  m_window_mode = config.window_mode;
+  m_window_width = config.window_width;
+  m_window_height = config.window_height;
+  m_window_title = std::move(config.window_title);
+  m_backfaceCulling = config.backface_culling;
+  m_msaaSamples = config.msaa_samples;
+  m_use_raytracing = config.use_raytracing;
+  m_geometry_source = std::move(config.geometry_source);
+  m_ply_file = std::move(config.ply_file);
+  m_gltf_file = std::move(config.gltf_file);
+  m_hdr_file = std::move(config.hdr_file);
+  m_gltf_models = std::move(config.gltf_models);
+  m_current_model_index = config.current_model_index;
+  m_hdr_files = std::move(config.hdr_files);
+  m_current_hdr_index = config.current_hdr_index;
+  m_ibl_settings = config.ibl_settings;
+  m_shininess = config.shininess;
+  m_specularStrength = config.specular_strength;
+  m_light = std::move(config.light);
 }
 
 void Application::setup_camera()
@@ -933,7 +707,7 @@ void Application::update_uniform_buffer()
 
     // IBL parameters: x=useIBL, y=intensity, z=tonemapMode, w=useSSS
     ubo.ibl_params = glm::vec4(m_use_ibl ? 1.0f : 0.0f, m_scene_manager->ibl_intensity(),
-      static_cast<float>(m_tonemap_mode), m_use_sss ? 1.0f : 0.0f);
+      static_cast<float>(m_tonemap_mode), m_use_sss ? m_sss_scale : 0.0f);
   }
 
   m_uniform_buffer->update(ubo);
@@ -1143,6 +917,7 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.default_descriptor = m_scene_manager->default_descriptor();
   ctx.material_descriptors = &m_scene_manager->material_descriptors();
   ctx.swapchain = m_swapchain.get();
+  ctx.clear_color = m_clear_color;
 
   m_render_graph.record(ctx);
 

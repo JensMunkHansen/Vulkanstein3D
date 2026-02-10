@@ -107,6 +107,7 @@ add_library(${TARGET_NAME}
   fence.cpp
   frame.cpp
   app.cpp
+  app_config.cpp
   scene_manager.cpp
   shaders.cpp
   semaphore.cpp

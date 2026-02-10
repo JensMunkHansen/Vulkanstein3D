@@ -43,6 +43,9 @@ struct FrameContext
 
   // For RT blit target
   const Swapchain* swapchain;
+
+  // Clear color (background)
+  glm::vec3 clear_color{ 0.0f, 0.0f, 0.0f };
 };
 
 /// Abstract base class for a render stage.

@@ -72,13 +72,29 @@ Add a post-lighting compute or fullscreen-quad pass that blurs diffuse lighting 
 - Would be a new render graph stage (`SSSBlurStage`) after the opaque lighting pass
 - Reference: `~/github/Rendering/AdvancedVulkanDemos/em_assets/shaders/scene_subsurface_scattering/SubSurfaceScatteringIrradianceFrag.glsl`
 
+## TODO: Wireframe Tube Impostors (VTK-style)
+Render mesh edges as 3D tubes using geometry shader impostors, toggleable at runtime.
+
+### Approach
+1. **Edge extraction** (CPU, one-time): Build a unique edge list from the index buffer to avoid drawing shared edges twice. Store as a line-list vertex/index buffer.
+2. **Geometry shader**: Input = line segments (edge endpoints). For each edge, emit a camera-facing quad (billboard) with width proportional to desired tube radius.
+3. **Fragment shader**: Ray-cylinder intersection to shade each pixel as a 3D tube with proper lighting, specular highlights, and `gl_FragDepth` write for correct occlusion against the solid mesh.
+4. **New render stage**: `WireframeStage` after `RasterOpaqueStage`, draws tube impostors. Toggled via ImGui checkbox.
+5. **New pipeline**: Line-list input topology, geometry shader, dedicated fragment shader.
+
+### Key details
+- Screen-space or world-space tube radius (world-space is more VTK-like)
+- Edge extraction runs once per model load, stored alongside the mesh
+- Geometry shaders are fine for a debug/visualization overlay (not performance-critical)
+- Could later upgrade to instanced quads + SSBO for better GPU performance
+
 ## TODO: Fetch glTF assets from Khronos at build time
 Instead of storing model data (ScatteringSkull, DamagedHelmet, etc.) in the repo via LFS, use CMake `FetchContent` or a download script to pull them from the [glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) repo. Same approach could work for HDR environments from [glTF-Sample-Environments](https://github.com/KhronosGroup/glTF-Sample-Environments). Keeps the repo leaner.
 
 ## TODO: Refactor `app.cpp` (~2050 lines)
 
-### 1. TOML Config → `AppConfig` struct (~230 lines)
-Extract `load_toml_configuration_file()` into a `AppConfig parse_toml(path)` free function returning a plain struct. Decouples config format from initialization logic. Easiest win.
+### 1. ~~TOML Config → `AppConfig` struct~~ (DONE)
+Extracted into `app_config.h/cpp`: `AppConfig parse_toml(path)` free function + `Application::apply_config()`.
 
 ### 2. Ray Tracing Resources → `RayTracingStage` or `RayTracingResources` (~250 lines)
 Move `create_rt_storage_image()`, `create_rt_descriptor()`, `create_rt_pipeline()`, `build_acceleration_structures()` out of app. The stage already records commands but doesn't own its resources.

@@ -119,6 +119,8 @@ int main(int argc, char* argv[])
       }
       ImGui::SameLine();
       ImGui::TextDisabled("(off = Immediate)");
+
+      ImGui::ColorEdit3("Background", &app.clear_color().x);
     }
 
     if (!app.gltf_models().empty() && ImGui::CollapsingHeader("Models", ImGuiTreeNodeFlags_DefaultOpen))
@@ -163,6 +165,9 @@ int main(int argc, char* argv[])
         ImGui::Checkbox("Emissive", &app.use_emissive());
         ImGui::Checkbox("Ambient Occlusion", &app.use_ao());
         ImGui::Checkbox("Subsurface Scattering", &app.use_sss());
+        if (app.use_sss()) {
+          ImGui::SliderFloat("SSS Scale", &app.sss_scale(), 0.0f, 5.0f);
+        }
 
         ImGui::Separator();
         ImGui::Checkbox("IBL Environment", &app.use_ibl());

@@ -335,8 +335,8 @@ void main()
   vec3 Lo = brdf * radiance * NdotL;
 
   // Subsurface translucency (Barré-Brisebois back-lighting)
-  bool useSSS = ubo.ibl_params.w > 0.5;
-  if (useSSS && pc.transmissionFactor > 0.0) {
+  float sssScale = ubo.ibl_params.w;
+  if (sssScale > 0.0 && pc.transmissionFactor > 0.0) {
     // Thickness texture is in [0,1], thicknessFactor scales to world units
     float thickness = texture(thicknessTexture, fragTexCoord).g * pc.thicknessFactor;
     // Exponential falloff: even thick areas transmit some light
@@ -351,7 +351,7 @@ void main()
 
     // Attenuation color tints the scattered light
     vec3 sss = attColor * backLight * transmission;
-    Lo += sss * albedo * radiance * pc.transmissionFactor;
+    Lo += sss * albedo * radiance * pc.transmissionFactor * sssScale;
   }
 
   // Get material parameters from uniforms

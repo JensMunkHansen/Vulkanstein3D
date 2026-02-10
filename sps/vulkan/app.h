@@ -7,6 +7,7 @@
 #include <string>
 
 #include <sps/vulkan/acceleration_structure.h>
+#include <sps/vulkan/app_config.h>
 #include <sps/vulkan/camera.h>
 #include <sps/vulkan/command_registry.h>
 #include <sps/vulkan/descriptor_builder.h>
@@ -55,18 +56,18 @@ struct UniformBufferObject
 class Application : public VulkanRenderer
 {
 private:
-  void load_toml_configuration_file(const std::string& file_name);
+  void apply_config(AppConfig config);
   bool m_stop_on_validation_message{ false };
-  std::string m_preferred_gpu;  // From TOML: vulkan.preferred_gpu
-  std::string m_geometry_source{"triangle"};  // From TOML: application.geometry.source
-  std::string m_ply_file;  // From TOML: application.geometry.ply_file
-  std::string m_gltf_file;  // From TOML: application.geometry.gltf_file
-  std::string m_hdr_file;   // From TOML: application.geometry.hdr_file
-  std::vector<std::string> m_gltf_models;  // From TOML: [glTFmodels].files
-  int m_current_model_index = -1;          // Index into m_gltf_models (-1 = none)
-  std::vector<std::string> m_hdr_files;   // From TOML: [HDRenvironments].files
-  int m_current_hdr_index = -1;           // Index into m_hdr_files (-1 = none)
-  IBLSettings m_ibl_settings;             // From TOML: [IBL]
+  std::string m_preferred_gpu;
+  std::string m_geometry_source{"triangle"};
+  std::string m_ply_file;
+  std::string m_gltf_file;
+  std::string m_hdr_file;
+  std::vector<std::string> m_gltf_models;
+  int m_current_model_index = -1;
+  std::vector<std::string> m_hdr_files;
+  int m_current_hdr_index = -1;
+  IBLSettings m_ibl_settings;
 
 public:
   Application(int argc, char* argv[]);
@@ -114,6 +115,7 @@ public:
   bool& use_emissive() { return m_use_emissive; }
   bool& use_ao() { return m_use_ao; }
   bool& use_sss() { return m_use_sss; }
+  float& sss_scale() { return m_sss_scale; }
   bool& use_ibl() { return m_use_ibl; }
   float ibl_intensity() const { return m_scene_manager->ibl_intensity(); }
   void set_ibl_intensity(float v) { m_scene_manager->set_ibl_intensity(v); }
@@ -121,6 +123,7 @@ public:
   static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)",
     "ACES + Boost", "Khronos PBR Neutral" };
   bool& show_light_indicator() { return m_show_light_indicator; }
+  glm::vec3& clear_color() { return m_clear_color; }
   Camera& camera() { return m_camera; }
   bool vsync_enabled() const { return m_vsync_enabled; }
   void set_vsync(bool enabled);
@@ -277,6 +280,7 @@ private:
   float m_metallicAmbient{ 0.3f }; // Fake IBL strength for metals (0-1)
   float m_aoStrength{ 1.0f };      // AO influence (0-1)
   float m_exposure{ 1.0f };        // Exposure/brightness multiplier
+  glm::vec3 m_clear_color{ 0.0f, 0.0f, 0.0f }; // Background clear color
 
   // Input state
   bool m_keys[512] = { false };
@@ -291,6 +295,7 @@ private:
   bool m_use_emissive = true;       // Emissive texture enabled by default
   bool m_use_ao = true;             // Ambient occlusion enabled by default
   bool m_use_sss = true;            // Subsurface scattering enabled by default
+  float m_sss_scale = 1.0f;        // SSS intensity multiplier (0-5)
   bool m_use_ibl = true;            // IBL enabled by default
   int m_tonemap_mode =
     5; // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR
