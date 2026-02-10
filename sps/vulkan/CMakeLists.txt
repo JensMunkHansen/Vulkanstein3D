@@ -142,6 +142,14 @@ add_library(${TARGET_NAME}
   ../tools/cla_parser.cpp
   )
 
+# LTO for GCC/Clang only — MSVC 14.44 /GL triggers ICE (C1001) during LTCG
+# on multiple source files (miniply.cpp, ply_loader.cpp, gltf_loader.cpp).
+# The exe targets still get /LTCG via sps_link_optimization().
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  include(spsCompilerPlatformFlags)
+  sps_link_optimization(${TARGET_NAME})
+endif()
+
 target_include_directories(${TARGET_NAME}
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../.."
   PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/../.."

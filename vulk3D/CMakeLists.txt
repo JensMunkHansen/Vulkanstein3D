@@ -46,6 +46,10 @@ target_link_libraries(${TARGET_NAME}
 
 endif()
 add_executable(app main2.cpp)
+# MSVC 14.44 c2.dll crashes during LTCG codegen — skip WPO on MSVC for now
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  sps_link_optimization(app)
+endif()
 
 # All dynamic loading
 target_link_libraries(app
@@ -68,6 +72,9 @@ add_custom_command(TARGET app POST_BUILD
 
 # ImGui-enabled version
 add_executable(app_imgui main_imgui.cpp)
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+  sps_link_optimization(app_imgui)
+endif()
 
 target_link_libraries(app_imgui
   PUBLIC
