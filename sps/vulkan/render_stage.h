@@ -13,7 +13,7 @@ namespace sps::vulkan
 
 class Camera;
 class Device;
-class GltfScene;
+struct GltfScene;
 class Mesh;
 class ResourceDescriptor;
 class RayTracingPipeline;
