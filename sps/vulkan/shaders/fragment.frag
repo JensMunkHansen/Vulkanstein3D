@@ -337,11 +337,13 @@ void main()
   vec3 Lo = brdf * radiance * NdotL;
 
   // Subsurface translucency (Barré-Brisebois back-lighting)
+  // alphaMode bit 3: derive transmission from thickness (no explicit transmission data)
+  bool thicknessAsTransmission = (pc.alphaMode & 8u) != 0u;
   float sssScale = ubo.ibl_params.w;
   if (sssScale > 0.0 && pc.transmissionFactor > 0.0) {
     // Thickness texture is in [0,1], thicknessFactor scales to world units
     float thickness = texture(thicknessTexture, fragTexCoord).g * pc.thicknessFactor;
-    // Exponential falloff: even thick areas transmit some light
+    // Exponential falloff: thin areas transmit more, thick areas less
     float transmission = exp(-thickness * 1.5);
     vec3 attColor = unpackColor(pc.attenuationColorPacked);
 
@@ -353,7 +355,12 @@ void main()
 
     // Attenuation color tints the scattered light
     vec3 sss = attColor * backLight * transmission;
-    Lo += sss * albedo * radiance * pc.transmissionFactor * sssScale;
+
+    // When deriving from thickness, use per-pixel transmission.
+    // When explicit transmission exists, use scalar transmissionFactor
+    // (thickness still modulates via exp() above for back-lighting intensity).
+    float effectiveTransmission = thicknessAsTransmission ? transmission : pc.transmissionFactor;
+    Lo += sss * albedo * radiance * effectiveTransmission * sssScale;
   }
 
   // Get material parameters from uniforms
@@ -417,13 +424,17 @@ void main()
   // Output linear HDR (tone mapping + gamma applied in composite pass)
 
   // SSS blur mask in alpha: 1.0 for SSS materials, 0.0 for non-SSS.
-  // The screen-space blur simulates lateral light scattering, which is uniform across
-  // the SSS surface (depends on scattering coefficients, not thickness).
-  // Thickness modulates the SSS *lighting* contribution above (Barré-Brisebois),
-  // while the blur spreads whatever colors are rendered, including direct/IBL lighting.
-  // TODO: Replace transmissionFactor scalar with a per-pixel transmission texture
-  // for spatially-varying SSS masking within a single material.
-  float blurMask = (pc.transmissionFactor > 0.0) ? 1.0 : 0.0;
+  // The screen-space blur simulates lateral light scattering.
+  // When we have explicit transmission data, all pixels of the material get blur.
+  // When deriving from thickness, only pixels with thickness > 0 get blur
+  // (e.g. teeth blur but gingiva doesn't, based on the thickness texture).
+  float blurMask;
+  if (thicknessAsTransmission) {
+    float t = texture(thicknessTexture, fragTexCoord).g * pc.thicknessFactor;
+    blurMask = (t > 0.0) ? 1.0 : 0.0;
+  } else {
+    blurMask = (pc.transmissionFactor > 0.0) ? 1.0 : 0.0;
+  }
 
   // Alpha mode handling (late discard per Khronos reference)
   uint alphaModeValue = pc.alphaMode & 3u;  // Mask off doubleSided bit

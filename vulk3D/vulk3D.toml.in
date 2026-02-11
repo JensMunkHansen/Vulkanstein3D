@@ -108,6 +108,7 @@ files = [
       "@DATA_DIR@/AlphaBlendModeTest/glTF-Binary/AlphaBlendModeTest.glb",
       "@DATA_DIR@/IridescenceMetallicSpheres/glTF/IridescenceMetallicSpheres.gltf",
       "@DATA_DIR@/ScatteringSkull/glTF-Binary/ScatteringSkull.glb",
+      "@DATA_DIR@/DiffuseTransmissionPlant/DiffuseTransmissionPlant.glb",
       "@LOCAL_DATA_DIR@/LowerJawScan/LowerJawScan.gltf",
 ]
 

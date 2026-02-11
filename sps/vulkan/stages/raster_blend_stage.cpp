@@ -74,7 +74,8 @@ void RasterBlendStage::record(const FrameContext& ctx)
     pc.metallicFactor = mat.metallicFactor;
     pc.roughnessFactor = mat.roughnessFactor;
     pc.alphaCutoff = mat.alphaCutoff;
-    pc.alphaMode = static_cast<uint32_t>(mat.alphaMode) | (mat.doubleSided ? 4u : 0u);
+    pc.alphaMode = static_cast<uint32_t>(mat.alphaMode) | (mat.doubleSided ? 4u : 0u)
+                 | (mat.deriveTransmissionFromThickness ? 8u : 0u);
     pc.iridescenceFactor = mat.iridescenceFactor;
     pc.iridescenceIor = mat.iridescenceIor;
     pc.iridescenceThicknessMin = mat.iridescenceThicknessMin;

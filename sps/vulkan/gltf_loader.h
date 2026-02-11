@@ -119,6 +119,11 @@ struct SceneMaterial
 
   // KHR_materials_transmission (proxy for diffuse_transmission)
   float transmissionFactor{0.0f};
+
+  // When true, no explicit transmission data exists — shader derives
+  // per-pixel transmission from thickness texture via exp(-thickness * k).
+  // When false, transmissionFactor (and future transmission texture) are authoritative.
+  bool deriveTransmissionFromThickness{false};
 };
 
 /// @brief Complete scene with merged geometry and per-primitive materials.

@@ -6,6 +6,11 @@ Produces:
   LowerJawScan/LowerJawScan.bin    — geometry binary
   LowerJawScan/LowerJawScan_images/baseColor.png   — 2048x2048 sRGB
   LowerJawScan/LowerJawScan_images/thickness.png   — 2048x2048 linear (G channel)
+
+Thickness map semantics:
+  - Teeth: thick in center (opaque), thin at edges (translucent SSS)
+  - Gingiva: thick everywhere (no light passes through the jaw)
+  - Thickness=0 only for unmapped/background pixels
 """
 
 import json
@@ -20,10 +25,17 @@ from scipy import ndimage
 
 # ── Tunable constants ────────────────────────────────────────────────────────
 TEX_SIZE = 2048
-TEETH_THRESHOLD = 0.38        # luminance*(1-saturation) cutoff for teeth
+
+# HSV-based teeth segmentation:
+#   Teeth are bright (high V) and unsaturated (low S) — white/ivory.
+#   Gingiva is pink/red — higher saturation, lower value.
+TEETH_SAT_MAX = 0.45          # teeth have low saturation (white/ivory/yellow)
+TEETH_VAL_MIN = 0.35          # teeth are brighter than gingiva
 MORPH_KERNEL_SIZE = 5
 MORPH_ITERATIONS = 2
+
 THICKNESS_POWER = 0.7         # sub-linear falloff curve
+GINGIVA_THICKNESS = 0.85      # gingiva = thick (no light through jaw)
 ROUGHNESS = 0.4
 ATTENUATION_COLOR = [0.8, 0.2, 0.15]   # warm reddish (blood/tissue)
 ATTENUATION_DISTANCE = 0.5
@@ -211,43 +223,63 @@ def bake_texture(positions, colors, faces, uvs, tex_size):
     return texture, mask
 
 
-# ── Step 4 & 5: Teeth Segmentation + Thickness Map ──────────────────────────
+# ── Step 4 & 5: Teeth Segmentation (HSV) + Thickness Map ────────────────────
 def make_thickness_map(texture, mask, tex_size):
-    """Segment teeth by brightness/saturation, generate thickness via distance transform."""
+    """Segment teeth via HSV thresholding, generate thickness via distance transform.
+
+    Teeth: bright (high V) and unsaturated (low S) — white/ivory color.
+    Gingiva: pink/red — higher saturation.
+
+    Thickness semantics:
+      - Teeth: distance transform from edge → thick center, thin edges (SSS at edges)
+      - Gingiva: uniformly thick (no light passes through the entire jaw)
+      - Background: 0
+    """
     print("Generating thickness map...")
 
-    # Luminance (Rec. 709)
-    luminance = 0.2126 * texture[:, :, 0] + 0.7152 * texture[:, :, 1] + 0.0722 * texture[:, :, 2]
-
-    # Saturation
+    # RGB → HSV (per-pixel)
     cmax = np.max(texture, axis=2)
     cmin = np.min(texture, axis=2)
     chroma = cmax - cmin
+
+    # Saturation = chroma / max (0 when max=0)
     saturation = np.where(cmax > 1e-6, chroma / cmax, 0.0)
+    # Value = max channel
+    value = cmax
 
-    # Teeth score: bright AND unsaturated
-    teeth_score = luminance * (1.0 - saturation)
-    teeth_mask = (teeth_score > TEETH_THRESHOLD) & mask
+    # Teeth: low saturation AND high value (bright white/ivory)
+    teeth_mask = (saturation < TEETH_SAT_MAX) & (value > TEETH_VAL_MIN) & mask
+    # Gingiva: everything else that's mapped
+    gingiva_mask = mask & ~teeth_mask
 
-    # Morphological cleanup: erode then dilate
+    # Morphological cleanup on teeth mask
     kernel = np.ones((MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE), dtype=bool)
     teeth_mask = ndimage.binary_erosion(teeth_mask, structure=kernel, iterations=MORPH_ITERATIONS)
     teeth_mask = ndimage.binary_dilation(teeth_mask, structure=kernel, iterations=MORPH_ITERATIONS)
+    # Recompute gingiva after cleanup
+    gingiva_mask = mask & ~teeth_mask
 
-    # Distance transform on teeth mask
+    # Distance transform on teeth mask → thick center, thin edges
     dist = ndimage.distance_transform_edt(teeth_mask)
     max_dist = dist.max()
     if max_dist > 0:
         dist = dist / max_dist
     dist = np.power(dist, THICKNESS_POWER)
 
-    # Thickness map: R=255 (no AO), G=thickness, B=0
+    # Compose thickness: teeth = distance-based, gingiva = uniformly thick
+    thickness = np.zeros((tex_size, tex_size), dtype=np.float32)
+    thickness[teeth_mask] = dist[teeth_mask]
+    thickness[gingiva_mask] = GINGIVA_THICKNESS
+
+    # Pack: R=255 (AO=1.0), G=thickness, B=0
     thickness_img = np.zeros((tex_size, tex_size, 3), dtype=np.uint8)
-    thickness_img[:, :, 0] = 255  # R channel (AO = 1.0)
-    thickness_img[:, :, 1] = (dist * 255).astype(np.uint8)  # G channel (thickness)
+    thickness_img[:, :, 0] = 255
+    thickness_img[:, :, 1] = (thickness * 255).astype(np.uint8)
 
     teeth_count = np.sum(teeth_mask)
+    gingiva_count = np.sum(gingiva_mask)
     print(f"  Teeth pixels: {teeth_count} ({teeth_count * 100 / (tex_size * tex_size):.1f}%)")
+    print(f"  Gingiva pixels: {gingiva_count} ({gingiva_count * 100 / (tex_size * tex_size):.1f}%)")
     print(f"  Max distance: {max_dist:.1f} pixels")
 
     return thickness_img
@@ -442,7 +474,7 @@ def main():
     Image.fromarray(base_color_img).save(IMG_DIR / "baseColor.png")
     print(f"  Saved {IMG_DIR / 'baseColor.png'}")
 
-    # Steps 4-5: Teeth segmentation + thickness map
+    # Steps 4-5: Teeth segmentation (HSV) + thickness map
     thickness_img = make_thickness_map(texture, mask, TEX_SIZE)
     Image.fromarray(thickness_img).save(IMG_DIR / "thickness.png")
     print(f"  Saved {IMG_DIR / 'thickness.png'}")
