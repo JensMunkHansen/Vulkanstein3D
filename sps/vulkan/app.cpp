@@ -2,7 +2,6 @@
 
 #include <memory>
 #include <spdlog/common.h>
-#include <sps/vulkan/config.h>
 
 #include <sps/tools/cla_parser.hpp>
 #include <sps/vulkan/app.h>
@@ -12,9 +11,6 @@
 
 #include <fstream>
 #include <sps/vulkan/vertex.h>
-#include <sps/vulkan/windowsurface.h>
-
-#include <sps/vulkan/device.h>
 
 // Dirty-hacks
 #include <sps/vulkan/commands.h>
@@ -45,15 +41,8 @@
 namespace sps::vulkan
 {
 
-Application::Application(int argc, char** argv)
+RendererConfig Application::build_renderer_config(int argc, char** argv, AppConfig& app_config)
 {
-  m_lastTime = glfwGetTime();
-
-  spdlog::trace("Initialising vulkan-renderer");
-
-  // Not working
-  bool enable_renderdoc_instance_layer = false;
-
   sps::tools::CommandLineArgumentParser cla_parser;
   cla_parser.parse_args(argc, argv);
 
@@ -62,7 +51,14 @@ Application::Application(int argc, char** argv)
     "Engine version: {}.{}.{}", ENGINE_VERSION[0], ENGINE_VERSION[1], ENGINE_VERSION[2]);
 
   // Load the configuration from the TOML file.
-  apply_config(parse_toml("./vulk3D.toml"));
+  app_config = parse_toml("./vulk3D.toml");
+
+  RendererConfig config;
+  config.window_title = app_config.window_title;
+  config.window_width = app_config.window_width;
+  config.window_height = app_config.window_height;
+  config.window_mode = app_config.window_mode;
+  config.preferred_gpu = app_config.preferred_gpu;
 
   auto enable_renderdoc = cla_parser.arg<bool>("--renderdoc");
   if (enable_renderdoc)
@@ -75,162 +71,69 @@ Application::Application(int argc, char** argv)
     if (*enable_renderdoc)
     {
       spdlog::trace("--renderdoc specified, enabling renderdoc instance layer");
-      enable_renderdoc_instance_layer = true;
+      config.enable_renderdoc = true;
     }
 #endif
   }
 
-  bool enable_validation_layers = true;
-
-  // If the user specified command line argument "--no-validation", the Khronos validation instance
-  // layer will be disabled. For debug builds, this is not advisable! Always use validation layers
-  // during development!
   const auto disable_validation = cla_parser.arg<bool>("--no-validation");
   if (disable_validation.value_or(false))
   {
     spdlog::warn("--no-validation specified, disabling validation layers");
-    enable_validation_layers = false;
+    config.enable_validation = false;
   }
 
-  spdlog::trace("Creating Vulkan instance");
-
-  m_window_width = 800;
-  m_window_height = 600;
-
-  const bool resizeable = true;
-  m_window = std::make_unique<sps::vulkan::Window>(
-    m_window_title, m_window_width, m_window_height, true, resizeable, m_window_mode);
-
-  m_instance = std::make_unique<sps::vulkan::Instance>(APP_NAME, ENGINE_NAME,
-    VK_MAKE_API_VERSION(0, APP_VERSION[0], APP_VERSION[1], APP_VERSION[2]),
-    VK_MAKE_API_VERSION(0, ENGINE_VERSION[0], ENGINE_VERSION[1], ENGINE_VERSION[2]),
-    enable_validation_layers, enable_renderdoc_instance_layer);
-
-  m_surface = std::make_unique<sps::vulkan::WindowSurface>(m_instance->instance(), m_window->get());
-
-#ifndef SPS_DEBUG
-  if (cla_parser.arg<bool>("--stop-on-validation-message").value_or(false))
+  const auto disable_vsync = cla_parser.arg<bool>("--no-vsync");
+  if (disable_vsync.value_or(false))
   {
-    spdlog::warn("--stop-on-validation-message specified. Application will call a breakpoint after "
-                 "reporting a "
-                 "validation layer message");
-    m_stop_on_validation_message = true;
+    spdlog::trace("V-sync disabled!");
+    config.vsync = false;
   }
 
-  m_instance->setup_vulkan_debug_callback();
-#endif
+  const auto no_separate_queue = cla_parser.arg<bool>("--no-separate-data-queue");
+  if (no_separate_queue.value_or(false))
+  {
+    spdlog::warn("Command line argument --no-separate-data-queue specified");
+    config.use_distinct_data_transfer_queue = false;
+  }
 
-  spdlog::trace("Creating window surface");
   auto preferred_graphics_card = cla_parser.arg<std::uint32_t>("--gpu");
   if (preferred_graphics_card)
   {
     spdlog::trace("Preferential graphics card index {} specified", *preferred_graphics_card);
+    config.preferred_gpu_index = *preferred_graphics_card;
   }
 
-  // V-sync defaults to ON (prevents tearing), use --no-vsync to disable
-  const auto disable_vertical_synchronisation = cla_parser.arg<bool>("--no-vsync");
-  if (disable_vertical_synchronisation.value_or(false))
+  return config;
+}
+
+Application::Application(int argc, char** argv)
+{
+  m_lastTime = glfwGetTime();
+
+  spdlog::trace("Initialising vulkan-renderer");
+
+  // Build renderer config from TOML + CLI, then construct renderer
+  AppConfig app_config;
+  RendererConfig renderer_config = build_renderer_config(argc, argv, app_config);
+  m_renderer = std::make_unique<VulkanRenderer>(renderer_config);
+
+  // Apply app-specific config (geometry, lighting, etc.)
+  apply_config(std::move(app_config));
+
+#ifndef SPS_DEBUG
   {
-    spdlog::trace("V-sync disabled!");
-    m_vsync_enabled = false;
-  }
-  else
-  {
-    spdlog::trace("V-sync enabled!");
-    m_vsync_enabled = true;
-  }
-
-  bool use_distinct_data_transfer_queue = true;
-
-  // Ignore distinct data transfer queue
-  const auto forbid_distinct_data_transfer_queue = cla_parser.arg<bool>("--no-separate-data-queue");
-  if (forbid_distinct_data_transfer_queue.value_or(false))
-  {
-    spdlog::warn("Command line argument --no-separate-data-queue specified");
-    spdlog::warn(
-      "This will force the application to avoid using a distinct queue for data transfer to GPU");
-    spdlog::warn("Performance loss might be a result of this!");
-    use_distinct_data_transfer_queue = false;
-  }
-
-  bool enable_debug_marker_device_extension = true;
-
-  if (!enable_renderdoc_instance_layer)
-  {
-    // Debug markers are only available if RenderDoc is enabled.
-    enable_debug_marker_device_extension = false;
-  }
-
-  // Check if Vulkan debug markers should be disabled.
-  // Those are only available if RenderDoc instance layer is enabled!
-  const auto no_vulkan_debug_markers = cla_parser.arg<bool>("--no-vk-debug-markers");
-  if (no_vulkan_debug_markers.value_or(false))
-  {
-    spdlog::warn("--no-vk-debug-markers specified, disabling useful debug markers!");
-    enable_debug_marker_device_extension = false;
-  }
-
-  const auto physical_devices = m_instance.get()->instance().enumeratePhysicalDevices();
-
-  if (spdlog::get_level() == spdlog::level::trace)
-  {
-    spdlog::trace(
-      "There are {} physical devices available on this system", physical_devices.size());
-    /*
-     * check if a suitable device can be found
-     */
-    for (vk::PhysicalDevice device : physical_devices)
+    sps::tools::CommandLineArgumentParser cla_parser;
+    cla_parser.parse_args(argc, argv);
+    if (cla_parser.arg<bool>("--stop-on-validation-message").value_or(false))
     {
-      Device::log_device_properties(device);
+      spdlog::warn("--stop-on-validation-message specified. Application will call a breakpoint after "
+                   "reporting a "
+                   "validation layer message");
+      m_stop_on_validation_message = true;
     }
   }
-
-  if (preferred_graphics_card && *preferred_graphics_card >= physical_devices.size())
-  {
-    spdlog::critical("GPU index {} out of range!", *preferred_graphics_card);
-    throw std::runtime_error("Invalid GPU index");
-  }
-
-  const vk::PhysicalDeviceFeatures required_features{
-    // Add required physical device features here
-  };
-
-  const vk::PhysicalDeviceFeatures optional_features{
-    // Add optional physical device features here
-  };
-
-  std::vector<const char*> required_extensions{
-    // Since we want to draw on a window, we need the swapchain extension
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-  };
-
-  const vk::PhysicalDevice physical_device = preferred_graphics_card
-    ? physical_devices[*preferred_graphics_card]
-    : Device::pick_best_physical_device(
-        *m_instance, m_surface->get(), required_features, required_extensions, m_preferred_gpu);
-
-  // Create physical and logical device
-  m_device =
-    std::make_unique<Device>(*m_instance, m_surface->get(), use_distinct_data_transfer_queue,
-      physical_device, required_extensions, required_features, optional_features);
-
-  // Setup resize callback BEFORE creating swapchain
-  m_window->set_user_ptr(m_window.get());
-  m_window->set_resize_callback(
-    [](GLFWwindow* window, int width, int height)
-    {
-      auto* win = static_cast<Window*>(glfwGetWindowUserPointer(window));
-      win->set_resize_pending(
-        static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
-    });
-
-  // Get actual framebuffer size (may differ from requested size)
-  std::uint32_t fb_width, fb_height;
-  m_window->get_framebuffer_size(fb_width, fb_height);
-
-  // Create swapchain with actual framebuffer size
-  m_swapchain =
-    std::make_unique<Swapchain>(*m_device, m_surface->get(), fb_width, fb_height, m_vsync_enabled);
+#endif
 
   // Setup camera
   setup_camera();
@@ -238,7 +141,7 @@ Application::Application(int argc, char** argv)
   // Clamp MSAA to device maximum
   if (m_msaaSamples != vk::SampleCountFlagBits::e1)
   {
-    auto maxSamples = m_device->max_usable_sample_count();
+    auto maxSamples = m_renderer->device().max_usable_sample_count();
     if (m_msaaSamples > maxSamples)
     {
       spdlog::warn("Requested MSAA {}x exceeds device max {}x, clamping",
@@ -249,7 +152,7 @@ Application::Application(int argc, char** argv)
   }
 
   // Create scene manager and load initial scene
-  m_scene_manager = std::make_unique<SceneManager>(*m_device);
+  m_scene_manager = std::make_unique<SceneManager>(m_renderer->device());
   m_scene_manager->set_ibl_settings(m_ibl_settings);
   m_scene_manager->create_defaults(m_hdr_file);
   auto load_result = m_scene_manager->load_initial_scene(m_geometry_source, m_gltf_file, m_ply_file);
@@ -275,20 +178,22 @@ Application::Application(int argc, char** argv)
 
   finalize_setup();
 
-  // Setup input callbacks
-  glfwSetWindowUserPointer(m_window->get(), this);
-  glfwSetKeyCallback(m_window->get(), key_callback);
-  glfwSetCursorPosCallback(m_window->get(), mouse_callback);
-  glfwSetScrollCallback(m_window->get(), scroll_callback);
+  // Setup resize and input callbacks
+  glfwSetWindowUserPointer(m_renderer->window().get(), this);
+  glfwSetFramebufferSizeCallback(m_renderer->window().get(),
+    [](GLFWwindow* window, int width, int height)
+    {
+      auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+      app->m_renderer->window().set_resize_pending(
+        static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+    });
+  glfwSetKeyCallback(m_renderer->window().get(), key_callback);
+  glfwSetCursorPosCallback(m_renderer->window().get(), mouse_callback);
+  glfwSetScrollCallback(m_renderer->window().get(), scroll_callback);
 }
 
 void Application::apply_config(AppConfig config)
 {
-  m_preferred_gpu = std::move(config.preferred_gpu);
-  m_window_mode = config.window_mode;
-  m_window_width = config.window_width;
-  m_window_height = config.window_height;
-  m_window_title = std::move(config.window_title);
   m_backfaceCulling = config.backface_culling;
   m_msaaSamples = config.msaa_samples;
   m_use_raytracing = config.use_raytracing;
@@ -316,23 +221,23 @@ void Application::setup_camera()
   m_camera.set_clipping_range(0.1f, 100.0f);
 
   std::uint32_t width, height;
-  m_window->get_framebuffer_size(width, height);
+  m_renderer->window().get_framebuffer_size(width, height);
   m_camera.set_aspect_ratio(static_cast<float>(width) / static_cast<float>(height));
 }
 
 void Application::create_depth_resources()
 {
-  vk::Extent2D extent = m_swapchain->extent();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
 
   m_depthStencil = std::make_unique<DepthStencilAttachment>(
-    *m_device, m_depthFormat, extent, m_msaaSamples);
+    m_renderer->device(), m_depthFormat, extent, m_msaaSamples);
 
   spdlog::trace("Created depth-stencil buffer {}x{}", extent.width, extent.height);
 }
 
 void Application::create_msaa_color_resources()
 {
-  vk::Extent2D extent = m_swapchain->extent();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
 
   // MSAA color target uses HDR format (resolves to m_hdrImage)
   vk::ImageCreateInfo imageInfo{};
@@ -350,18 +255,18 @@ void Application::create_msaa_color_resources()
   imageInfo.samples = m_msaaSamples;
   imageInfo.sharingMode = vk::SharingMode::eExclusive;
 
-  m_hdrMsaaImage = m_device->device().createImage(imageInfo);
+  m_hdrMsaaImage = m_renderer->device().device().createImage(imageInfo);
 
   vk::MemoryRequirements memRequirements =
-    m_device->device().getImageMemoryRequirements(m_hdrMsaaImage);
+    m_renderer->device().device().getImageMemoryRequirements(m_hdrMsaaImage);
 
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+  allocInfo.memoryTypeIndex = m_renderer->device().find_memory_type(
     memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-  m_hdrMsaaImageMemory = m_device->device().allocateMemory(allocInfo);
-  m_device->device().bindImageMemory(m_hdrMsaaImage, m_hdrMsaaImageMemory, 0);
+  m_hdrMsaaImageMemory = m_renderer->device().device().allocateMemory(allocInfo);
+  m_renderer->device().device().bindImageMemory(m_hdrMsaaImage, m_hdrMsaaImageMemory, 0);
 
   vk::ImageViewCreateInfo viewInfo{};
   viewInfo.image = m_hdrMsaaImage;
@@ -373,7 +278,7 @@ void Application::create_msaa_color_resources()
   viewInfo.subresourceRange.baseArrayLayer = 0;
   viewInfo.subresourceRange.layerCount = 1;
 
-  m_hdrMsaaImageView = m_device->device().createImageView(viewInfo);
+  m_hdrMsaaImageView = m_renderer->device().device().createImageView(viewInfo);
 
   spdlog::trace("Created HDR MSAA color image {}x{} ({}x samples)", extent.width, extent.height,
     static_cast<int>(m_msaaSamples));
@@ -382,14 +287,14 @@ void Application::create_msaa_color_resources()
 void Application::create_uniform_buffer()
 {
   m_uniform_buffer =
-    std::make_unique<UniformBuffer<UniformBufferObject>>(*m_device, "camera uniform buffer");
+    std::make_unique<UniformBuffer<UniformBufferObject>>(m_renderer->device(), "camera uniform buffer");
   spdlog::trace("Created uniform buffer");
 }
 
 void Application::create_hdr_resources()
 {
-  auto dev = m_device->device();
-  vk::Extent2D extent = m_swapchain->extent();
+  auto dev = m_renderer->device().device();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
 
   // Single-sample HDR image (resolve target for MSAA, or direct render target)
   vk::ImageCreateInfo imageInfo{};
@@ -412,7 +317,7 @@ void Application::create_hdr_resources()
   vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_hdrImage);
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+  allocInfo.memoryTypeIndex = m_renderer->device().find_memory_type(
     memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
   m_hdrImageMemory = dev.allocateMemory(allocInfo);
@@ -447,7 +352,7 @@ void Application::create_hdr_resources()
 
 void Application::destroy_hdr_resources()
 {
-  auto dev = m_device->device();
+  auto dev = m_renderer->device().device();
 
   if (m_hdrImageView)
   {
@@ -484,7 +389,7 @@ void Application::destroy_hdr_resources()
 
 void Application::create_composite_pipeline()
 {
-  auto dev = m_device->device();
+  auto dev = m_renderer->device().device();
 
   // Descriptor set layout: single sampler for the HDR buffer
   vk::DescriptorSetLayoutBinding binding{};
@@ -548,8 +453,8 @@ void Application::create_composite_pipeline()
   specification.device = dev;
   specification.vertexFilepath = SHADER_DIR "fullscreen_quad.spv";
   specification.fragmentFilepath = SHADER_DIR "composite.spv";
-  specification.swapchainExtent = m_swapchain->extent();
-  specification.swapchainImageFormat = m_swapchain->image_format();
+  specification.swapchainExtent = m_renderer->swapchain().extent();
+  specification.swapchainImageFormat = m_renderer->swapchain().image_format();
   specification.backfaceCulling = false;
   specification.existingRenderPass = m_composite_renderpass;
   specification.existingPipelineLayout = m_composite_pipelineLayout;
@@ -565,9 +470,9 @@ void Application::create_composite_pipeline()
 
 void Application::create_composite_framebuffers()
 {
-  auto dev = m_device->device();
-  vk::Extent2D extent = m_swapchain->extent();
-  const auto& imageViews = m_swapchain->image_views();
+  auto dev = m_renderer->device().device();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
+  const auto& imageViews = m_renderer->swapchain().image_views();
 
   m_composite_framebuffers.resize(imageViews.size());
   for (size_t i = 0; i < imageViews.size(); i++)
@@ -588,8 +493,8 @@ void Application::create_composite_framebuffers()
 
 void Application::create_blur_resources()
 {
-  auto dev = m_device->device();
-  vk::Extent2D extent = m_swapchain->extent();
+  auto dev = m_renderer->device().device();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
   m_blur_extent = extent;
 
   // Create ping image (intermediate for separable blur)
@@ -612,7 +517,7 @@ void Application::create_blur_resources()
   vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_blurPingImage);
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
+  allocInfo.memoryTypeIndex = m_renderer->device().find_memory_type(
     memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
   m_blurPingImageMemory = dev.allocateMemory(allocInfo);
@@ -661,8 +566,8 @@ void Application::create_blur_resources()
     vk::SubmitInfo submitInfo{};
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cmd;
-    m_device->graphics_queue().submit(submitInfo);
-    m_device->graphics_queue().waitIdle();
+    m_renderer->device().graphics_queue().submit(submitInfo);
+    m_renderer->device().graphics_queue().waitIdle();
     dev.freeCommandBuffers(m_commandPool, cmd);
   }
 
@@ -824,7 +729,7 @@ void Application::create_blur_resources()
 
 void Application::destroy_blur_resources()
 {
-  auto dev = m_device->device();
+  auto dev = m_renderer->device().device();
 
   if (m_blurPingImageView)
   {
@@ -845,8 +750,8 @@ void Application::destroy_blur_resources()
 
 void Application::create_rt_storage_image()
 {
-  auto dev = m_device->device();
-  vk::Extent2D extent = m_swapchain->extent();
+  auto dev = m_renderer->device().device();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
 
   // Create storage image for RT output
   vk::ImageCreateInfo imageInfo{};
@@ -869,7 +774,7 @@ void Application::create_rt_storage_image()
   vk::MemoryAllocateInfo allocInfo{};
   allocInfo.allocationSize = memReqs.size;
   allocInfo.memoryTypeIndex =
-    m_device->find_memory_type(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    m_renderer->device().find_memory_type(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
   m_rt_image_memory = dev.allocateMemory(allocInfo);
   dev.bindImageMemory(m_rt_image, m_rt_image_memory, 0);
@@ -892,7 +797,7 @@ void Application::create_rt_storage_image()
 
 void Application::create_rt_descriptor()
 {
-  auto dev = m_device->device();
+  auto dev = m_renderer->device().device();
 
   // Create descriptor pool
   std::vector<vk::DescriptorPoolSize> poolSizes = {
@@ -1007,7 +912,7 @@ void Application::create_rt_descriptor()
 
 void Application::create_rt_pipeline()
 {
-  m_rt_pipeline = std::make_unique<RayTracingPipeline>(*m_device);
+  m_rt_pipeline = std::make_unique<RayTracingPipeline>(m_renderer->device());
   m_rt_pipeline->create(
     SHADER_DIR "raygen.spv",
     SHADER_DIR "miss.spv",
@@ -1017,7 +922,7 @@ void Application::create_rt_pipeline()
 
 void Application::build_acceleration_structures()
 {
-  if (!m_device->supports_ray_tracing() || !m_scene_manager->mesh())
+  if (!m_renderer->device().supports_ray_tracing() || !m_scene_manager->mesh())
   {
     spdlog::warn("Cannot build acceleration structures: RT not supported or no mesh");
     return;
@@ -1029,7 +934,7 @@ void Application::build_acceleration_structures()
   allocInfo.level = vk::CommandBufferLevel::ePrimary;
   allocInfo.commandBufferCount = 1;
 
-  auto cmdBuffers = m_device->device().allocateCommandBuffers(allocInfo);
+  auto cmdBuffers = m_renderer->device().device().allocateCommandBuffers(allocInfo);
   vk::CommandBuffer cmd = cmdBuffers[0];
 
   vk::CommandBufferBeginInfo beginInfo{};
@@ -1037,11 +942,11 @@ void Application::build_acceleration_structures()
   cmd.begin(beginInfo);
 
   // Build BLAS
-  m_blas = std::make_unique<AccelerationStructure>(*m_device, "mesh BLAS");
+  m_blas = std::make_unique<AccelerationStructure>(m_renderer->device(), "mesh BLAS");
   m_blas->build_blas(cmd, *m_scene_manager->mesh());
 
   // Build TLAS
-  m_tlas = std::make_unique<AccelerationStructure>(*m_device, "scene TLAS");
+  m_tlas = std::make_unique<AccelerationStructure>(m_renderer->device(), "scene TLAS");
   std::vector<std::pair<const AccelerationStructure*, glm::mat4>> instances;
   instances.push_back({ m_blas.get(), glm::mat4(1.0f) });
   m_tlas->build_tlas(cmd, instances);
@@ -1053,10 +958,10 @@ void Application::build_acceleration_structures()
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &cmd;
 
-  m_device->graphics_queue().submit(submitInfo, nullptr);
-  m_device->wait_idle();
+  m_renderer->device().graphics_queue().submit(submitInfo, nullptr);
+  m_renderer->device().wait_idle();
 
-  m_device->device().freeCommandBuffers(m_commandPool, cmd);
+  m_renderer->device().device().freeCommandBuffers(m_commandPool, cmd);
 
   spdlog::trace("Built acceleration structures");
 }
@@ -1197,7 +1102,7 @@ void Application::key_callback(GLFWwindow* window, int key, int scancode, int ac
     if (monitor)
     {
       glfwSetWindowMonitor(window, nullptr, 100, 100,
-        static_cast<int>(app->m_window_width), static_cast<int>(app->m_window_height), 0);
+        static_cast<int>(app->m_renderer->window_width()), static_cast<int>(app->m_renderer->window_height()), 0);
     }
     else
     {
@@ -1293,9 +1198,9 @@ void Application::run()
 {
   spdlog::trace("Running Application");
 
-  while (!m_window->should_close())
+  while (!m_renderer->window().should_close())
   {
-    m_window->poll();
+    m_renderer->window().poll();
     process_input();
     update_uniform_buffer();
     render();
@@ -1323,7 +1228,7 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   FrameContext ctx{};
   ctx.command_buffer = commandBuffer;
   ctx.image_index = imageIndex;
-  ctx.extent = m_swapchain->extent();
+  ctx.extent = m_renderer->swapchain().extent();
   ctx.scene_render_pass = m_scene_renderpass;
   ctx.scene_framebuffer = m_scene_framebuffers[imageIndex];
   ctx.pipeline_layout = m_pipelineLayout;
@@ -1334,7 +1239,7 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.camera = &m_camera;
   ctx.default_descriptor = m_scene_manager->default_descriptor();
   ctx.material_descriptors = &m_scene_manager->material_descriptors();
-  ctx.swapchain = m_swapchain.get();
+  ctx.swapchain = &m_renderer->swapchain();
   ctx.clear_color = m_clear_color;
 
   m_render_graph.record(ctx);
@@ -1363,7 +1268,7 @@ void Application::calculateFrameRate()
     int framerate{ std::max(1, int(m_numFrames / delta)) };
     std::stringstream title;
     title << "Running at " << framerate << " fps.";
-    glfwSetWindowTitle(m_window->get(), title.str().c_str());
+    glfwSetWindowTitle(m_renderer->window().get(), title.str().c_str());
     m_lastTime = m_currentTime;
     m_numFrames = -1;
     m_frameTime = float(1000.0 / framerate);
@@ -1375,23 +1280,23 @@ void Application::recreate_swapchain()
 {
   // 1. Wait for valid size (not 0×0)
   std::uint32_t width, height;
-  m_window->get_framebuffer_size(width, height);
+  m_renderer->window().get_framebuffer_size(width, height);
   while (width == 0 || height == 0)
   {
-    m_window->wait_for_focus();
-    m_window->get_framebuffer_size(width, height);
+    m_renderer->window().wait_for_focus();
+    m_renderer->window().get_framebuffer_size(width, height);
   }
 
   // 2. Wait for GPU to finish using old resources
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
 
   // 3. Destroy framebuffers (reverse order of creation)
   for (auto fb : m_scene_framebuffers)
-    m_device->device().destroyFramebuffer(fb);
+    m_renderer->device().device().destroyFramebuffer(fb);
   m_scene_framebuffers.clear();
 
   for (auto fb : m_composite_framebuffers)
-    m_device->device().destroyFramebuffer(fb);
+    m_renderer->device().device().destroyFramebuffer(fb);
   m_composite_framebuffers.clear();
 
   // 4. Destroy old depth-stencil resources
@@ -1407,13 +1312,13 @@ void Application::recreate_swapchain()
   m_renderFinished.clear();
 
   // 6. Recreate swapchain (handles its own image views internally)
-  m_swapchain->recreate(width, height);
+  m_renderer->swapchain().recreate(width, height);
 
   // 7. Recreate per-swapchain-image semaphores
-  m_renderFinished.resize(m_swapchain->image_count());
-  for (std::uint32_t i = 0; i < m_swapchain->image_count(); i++)
+  m_renderFinished.resize(m_renderer->swapchain().image_count());
+  for (std::uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
   {
-    m_renderFinished[i] = std::make_unique<Semaphore>(*m_device, "render-finished-" + std::to_string(i));
+    m_renderFinished[i] = std::make_unique<Semaphore>(m_renderer->device(), "render-finished-" + std::to_string(i));
   }
 
   // 8. Recreate depth resources for new size
@@ -1429,9 +1334,9 @@ void Application::recreate_swapchain()
   // 8b. Recreate RT storage image if RT is enabled
   if (m_rt_image)
   {
-    m_device->device().destroyImageView(m_rt_image_view);
-    m_device->device().destroyImage(m_rt_image);
-    m_device->device().freeMemory(m_rt_image_memory);
+    m_renderer->device().device().destroyImageView(m_rt_image_view);
+    m_renderer->device().device().destroyImage(m_rt_image);
+    m_renderer->device().device().freeMemory(m_rt_image_memory);
     m_rt_image_view = VK_NULL_HANDLE;
     m_rt_image = VK_NULL_HANDLE;
     m_rt_image_memory = VK_NULL_HANDLE;
@@ -1449,14 +1354,14 @@ void Application::recreate_swapchain()
     write.descriptorType = vk::DescriptorType::eStorageImage;
     write.pImageInfo = &imageInfo;
 
-    m_device->device().updateDescriptorSets(write, {});
+    m_renderer->device().device().updateDescriptorSets(write, {});
   }
 
   // 9. Create new scene framebuffers (HDR target)
   {
-    vk::Extent2D extent = m_swapchain->extent();
-    m_scene_framebuffers.resize(m_swapchain->image_count());
-    for (uint32_t i = 0; i < m_swapchain->image_count(); i++)
+    vk::Extent2D extent = m_renderer->swapchain().extent();
+    m_scene_framebuffers.resize(m_renderer->swapchain().image_count());
+    for (uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
     {
       std::vector<vk::ImageView> attachments;
       if (m_msaaSamples != vk::SampleCountFlagBits::e1)
@@ -1476,7 +1381,7 @@ void Application::recreate_swapchain()
       fbInfo.width = extent.width;
       fbInfo.height = extent.height;
       fbInfo.layers = 1;
-      m_scene_framebuffers[i] = m_device->device().createFramebuffer(fbInfo);
+      m_scene_framebuffers[i] = m_renderer->device().device().createFramebuffer(fbInfo);
     }
   }
 
@@ -1496,7 +1401,7 @@ void Application::recreate_swapchain()
     write.descriptorCount = 1;
     write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
     write.pImageInfo = &imageInfo;
-    m_device->device().updateDescriptorSets(write, {});
+    m_renderer->device().device().updateDescriptorSets(write, {});
   }
 
   // 9d. Recreate blur resources (needs HDR image + depth-stencil + command pool)
@@ -1511,17 +1416,17 @@ void Application::recreate_swapchain()
   m_camera.set_aspect_ratio(static_cast<float>(width) / static_cast<float>(height));
 
   // Clear resize flag if set
-  if (m_window->has_pending_resize())
+  if (m_renderer->window().has_pending_resize())
   {
     std::uint32_t w, h;
-    m_window->get_pending_resize(w, h);
+    m_renderer->window().get_pending_resize(w, h);
   }
 
   // Notify render stages of resize
-  m_render_graph.on_swapchain_resize(*m_device, m_swapchain->extent());
+  m_render_graph.on_swapchain_resize(m_renderer->device(), m_renderer->swapchain().extent());
 
   spdlog::trace(
-    "Swapchain recreated: {}x{}", m_swapchain->extent().width, m_swapchain->extent().height);
+    "Swapchain recreated: {}x{}", m_renderer->swapchain().extent().width, m_renderer->swapchain().extent().height);
 }
 
 void Application::render()
@@ -1533,9 +1438,9 @@ void Application::render()
   uint32_t imageIndex;
   try
   {
-    imageIndex = m_device->device()
+    imageIndex = m_renderer->device().device()
                    .acquireNextImageKHR(
-                     *m_swapchain->swapchain(), UINT64_MAX, *m_imageAvailable->semaphore(), nullptr)
+                     *m_renderer->swapchain().swapchain(), UINT64_MAX, *m_imageAvailable->semaphore(), nullptr)
                    .value;
   }
   catch (const vk::OutOfDateKHRError&)
@@ -1566,13 +1471,13 @@ void Application::render()
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
 
-  m_device->graphics_queue().submit(submitInfo, m_inFlight->get());
+  m_renderer->device().graphics_queue().submit(submitInfo, m_inFlight->get());
 
   // Present
   vk::PresentInfoKHR presentInfo = {};
   presentInfo.waitSemaphoreCount = 1;
   presentInfo.pWaitSemaphores = signalSemaphores;
-  vk::SwapchainKHR swapChains[] = { *m_swapchain->swapchain() };
+  vk::SwapchainKHR swapChains[] = { *m_renderer->swapchain().swapchain() };
   presentInfo.swapchainCount = 1;
   presentInfo.pSwapchains = swapChains;
   presentInfo.pImageIndices = &imageIndex;
@@ -1580,7 +1485,7 @@ void Application::render()
   vk::Result presentResult;
   try
   {
-    presentResult = m_device->present_queue().presentKHR(presentInfo);
+    presentResult = m_renderer->device().present_queue().presentKHR(presentInfo);
   }
   catch (const vk::OutOfDateKHRError&)
   {
@@ -1589,7 +1494,7 @@ void Application::render()
 
   // Check if we need to recreate (out of date, suboptimal, or resize requested)
   if (presentResult == vk::Result::eErrorOutOfDateKHR ||
-    presentResult == vk::Result::eSuboptimalKHR || m_window->has_pending_resize())
+    presentResult == vk::Result::eSuboptimalKHR || m_renderer->window().has_pending_resize())
   {
     recreate_swapchain();
   }
@@ -1608,13 +1513,13 @@ void Application::make_pipeline(
 
   // Create scene render pass (HDR target)
   m_scene_renderpass = sps::vulkan::make_scene_renderpass(
-    m_device->device(), m_hdrFormat, m_depthFormat, true, m_msaaSamples);
+    m_renderer->device().device(), m_hdrFormat, m_depthFormat, true, m_msaaSamples);
 
   sps::vulkan::GraphicsPipelineInBundle specification = {};
-  specification.device = m_device->device();
+  specification.device = m_renderer->device().device();
   specification.vertexFilepath = vertex_shader;
   specification.fragmentFilepath = fragment_shader;
-  specification.swapchainExtent = m_swapchain->extent();
+  specification.swapchainExtent = m_renderer->swapchain().extent();
   specification.swapchainImageFormat = m_hdrFormat; // HDR target format
   specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
 
@@ -1670,11 +1575,11 @@ void Application::make_pipeline(
 void Application::create_debug_2d_pipeline()
 {
   sps::vulkan::GraphicsPipelineInBundle specification = {};
-  specification.device = m_device->device();
+  specification.device = m_renderer->device().device();
   specification.vertexFilepath = SHADER_DIR "fullscreen_quad.spv";
   specification.fragmentFilepath = SHADER_DIR "debug_texture2d.spv";
-  specification.swapchainExtent = m_swapchain->extent();
-  specification.swapchainImageFormat = m_swapchain->image_format();
+  specification.swapchainExtent = m_renderer->swapchain().extent();
+  specification.swapchainImageFormat = m_renderer->swapchain().image_format();
   specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
 
   // No vertex input - fullscreen quad generates vertices in shader
@@ -1751,7 +1656,7 @@ void Application::create_light_indicator()
     }
   }
 
-  m_light_indicator_mesh = std::make_unique<Mesh>(*m_device, "light_indicator", vertices, indices);
+  m_light_indicator_mesh = std::make_unique<Mesh>(m_renderer->device(), "light_indicator", vertices, indices);
 
   // No separate pipeline needed - reuse main pipeline with different model matrix
   spdlog::info("Created light indicator sphere ({} vertices)", vertices.size());
@@ -1760,13 +1665,13 @@ void Application::create_light_indicator()
 void Application::reload_shaders(
   const std::string& vertex_shader, const std::string& fragment_shader)
 {
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
 
   // Destroy old pipelines
-  m_device->device().destroyPipeline(m_pipeline);
-  m_device->device().destroyPipeline(m_blend_pipeline);
-  m_device->device().destroyPipelineLayout(m_pipelineLayout);
-  m_device->device().destroyRenderPass(m_scene_renderpass);
+  m_renderer->device().device().destroyPipeline(m_pipeline);
+  m_renderer->device().device().destroyPipeline(m_blend_pipeline);
+  m_renderer->device().device().destroyPipelineLayout(m_pipelineLayout);
+  m_renderer->device().device().destroyRenderPass(m_scene_renderpass);
 
   make_pipeline(vertex_shader, fragment_shader);
 
@@ -1781,10 +1686,10 @@ void Application::reload_shaders(
 
 bool Application::save_screenshot(const std::string& filepath)
 {
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
 
   // Get current swapchain image
-  auto images = m_swapchain->images();
+  auto images = m_renderer->swapchain().images();
   if (images.empty())
   {
     spdlog::error("No swapchain images available for screenshot");
@@ -1793,11 +1698,11 @@ bool Application::save_screenshot(const std::string& filepath)
 
   // Use the first swapchain image (most recently presented)
   vk::Image source_image = images[0];
-  vk::Format format = m_swapchain->image_format();
-  vk::Extent2D extent = m_swapchain->extent();
+  vk::Format format = m_renderer->swapchain().image_format();
+  vk::Extent2D extent = m_renderer->swapchain().extent();
 
   return sps::vulkan::save_screenshot(
-    *m_device, m_commandPool, source_image, format, extent, filepath);
+    m_renderer->device(), m_commandPool, source_image, format, extent, filepath);
 }
 
 bool Application::save_screenshot()
@@ -1949,7 +1854,7 @@ void Application::poll_commands()
         {
           // Currently fullscreen -> go windowed
           glfwSetWindowMonitor(win, nullptr, 100, 100,
-            static_cast<int>(m_window_width), static_cast<int>(m_window_height), 0);
+            static_cast<int>(m_renderer->window_width()), static_cast<int>(m_renderer->window_height()), 0);
           spdlog::info("Switched to windowed mode");
         }
         else
@@ -2032,7 +1937,7 @@ void Application::load_model(int index)
   if (index == m_current_model_index)
     return;
 
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
   auto result = m_scene_manager->load_model(m_gltf_models[index], m_uniform_buffer->buffer());
   if (!result.success)
     return;
@@ -2046,7 +1951,7 @@ void Application::load_model(int index)
   }
 
   // RT rebuild
-  if (m_device->supports_ray_tracing() && m_blas)
+  if (m_renderer->device().supports_ray_tracing() && m_blas)
   {
     m_blas.reset();
     m_tlas.reset();
@@ -2066,7 +1971,7 @@ void Application::load_hdr(int index)
   if (index == m_current_hdr_index)
     return;
 
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
   m_scene_manager->load_hdr(m_hdr_files[index], m_uniform_buffer->buffer());
   m_current_hdr_index = index;
 }
@@ -2165,7 +2070,7 @@ Application::~Application()
 {
   spdlog::trace("Destroying Application");
 
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
 
   m_inFlight.reset(nullptr);
   m_imageAvailable.reset(nullptr);
@@ -2175,32 +2080,32 @@ Application::~Application()
   m_scene_manager.reset();
   m_uniform_buffer.reset();
 
-  m_device->device().destroyCommandPool(m_commandPool);
+  m_renderer->device().device().destroyCommandPool(m_commandPool);
 
   // Destroy scene pipelines
-  m_device->device().destroyPipeline(m_pipeline);
-  m_device->device().destroyPipeline(m_blend_pipeline);
-  m_device->device().destroyPipelineLayout(m_pipelineLayout);
-  m_device->device().destroyRenderPass(m_scene_renderpass);
+  m_renderer->device().device().destroyPipeline(m_pipeline);
+  m_renderer->device().device().destroyPipeline(m_blend_pipeline);
+  m_renderer->device().device().destroyPipelineLayout(m_pipelineLayout);
+  m_renderer->device().device().destroyRenderPass(m_scene_renderpass);
 
   // Destroy 2D debug pipeline
-  m_device->device().destroyPipeline(m_debug_2d_pipeline);
-  m_device->device().destroyPipelineLayout(m_debug_2d_pipelineLayout);
+  m_renderer->device().device().destroyPipeline(m_debug_2d_pipeline);
+  m_renderer->device().device().destroyPipelineLayout(m_debug_2d_pipelineLayout);
 
   // Destroy composite pipeline
-  m_device->device().destroyPipeline(m_composite_pipeline);
-  m_device->device().destroyPipelineLayout(m_composite_pipelineLayout);
-  m_device->device().destroyRenderPass(m_composite_renderpass);
+  m_renderer->device().device().destroyPipeline(m_composite_pipeline);
+  m_renderer->device().device().destroyPipelineLayout(m_composite_pipelineLayout);
+  m_renderer->device().device().destroyRenderPass(m_composite_renderpass);
   if (m_composite_descriptor_pool)
-    m_device->device().destroyDescriptorPool(m_composite_descriptor_pool);
+    m_renderer->device().device().destroyDescriptorPool(m_composite_descriptor_pool);
   if (m_composite_descriptor_layout)
-    m_device->device().destroyDescriptorSetLayout(m_composite_descriptor_layout);
+    m_renderer->device().device().destroyDescriptorSetLayout(m_composite_descriptor_layout);
 
   // Destroy framebuffers
   for (auto fb : m_scene_framebuffers)
-    m_device->device().destroyFramebuffer(fb);
+    m_renderer->device().device().destroyFramebuffer(fb);
   for (auto fb : m_composite_framebuffers)
-    m_device->device().destroyFramebuffer(fb);
+    m_renderer->device().device().destroyFramebuffer(fb);
 
   // Destroy depth-stencil resources
   m_depthStencil.reset();
@@ -2208,20 +2113,20 @@ Application::~Application()
   // Destroy HDR resources (includes MSAA)
   destroy_hdr_resources();
   if (m_hdrSampler)
-    m_device->device().destroySampler(m_hdrSampler);
+    m_renderer->device().device().destroySampler(m_hdrSampler);
 
   // Destroy SSS blur resources
   destroy_blur_resources();
   if (m_sss_blur_pipeline)
-    m_device->device().destroyPipeline(m_sss_blur_pipeline);
+    m_renderer->device().device().destroyPipeline(m_sss_blur_pipeline);
   if (m_sss_blur_pipelineLayout)
-    m_device->device().destroyPipelineLayout(m_sss_blur_pipelineLayout);
+    m_renderer->device().device().destroyPipelineLayout(m_sss_blur_pipelineLayout);
   if (m_sss_blur_descriptor_pool)
-    m_device->device().destroyDescriptorPool(m_sss_blur_descriptor_pool);
+    m_renderer->device().device().destroyDescriptorPool(m_sss_blur_descriptor_pool);
   if (m_sss_blur_descriptor_layout)
-    m_device->device().destroyDescriptorSetLayout(m_sss_blur_descriptor_layout);
+    m_renderer->device().device().destroyDescriptorSetLayout(m_sss_blur_descriptor_layout);
   if (m_sss_stencil_sampler)
-    m_device->device().destroySampler(m_sss_stencil_sampler);
+    m_renderer->device().device().destroySampler(m_sss_stencil_sampler);
 
   // Destroy RT resources
   m_rt_pipeline.reset();
@@ -2229,15 +2134,15 @@ Application::~Application()
   m_blas.reset();
 
   if (m_rt_image_view)
-    m_device->device().destroyImageView(m_rt_image_view);
+    m_renderer->device().device().destroyImageView(m_rt_image_view);
   if (m_rt_image)
-    m_device->device().destroyImage(m_rt_image);
+    m_renderer->device().device().destroyImage(m_rt_image);
   if (m_rt_image_memory)
-    m_device->device().freeMemory(m_rt_image_memory);
+    m_renderer->device().device().freeMemory(m_rt_image_memory);
   if (m_rt_descriptor_pool)
-    m_device->device().destroyDescriptorPool(m_rt_descriptor_pool);
+    m_renderer->device().device().destroyDescriptorPool(m_rt_descriptor_pool);
   if (m_rt_descriptor_layout)
-    m_device->device().destroyDescriptorSetLayout(m_rt_descriptor_layout);
+    m_renderer->device().device().destroyDescriptorSetLayout(m_rt_descriptor_layout);
 
   // Swapchain destroyed in renderer
   // Surface ..
@@ -2256,9 +2161,9 @@ void Application::finalize_setup()
 
   // Create scene framebuffers (HDR target)
   {
-    vk::Extent2D extent = m_swapchain->extent();
-    m_scene_framebuffers.resize(m_swapchain->image_count());
-    for (uint32_t i = 0; i < m_swapchain->image_count(); i++)
+    vk::Extent2D extent = m_renderer->swapchain().extent();
+    m_scene_framebuffers.resize(m_renderer->swapchain().image_count());
+    for (uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
     {
       std::vector<vk::ImageView> attachments;
       if (m_msaaSamples != vk::SampleCountFlagBits::e1)
@@ -2276,29 +2181,29 @@ void Application::finalize_setup()
       fbInfo.width = extent.width;
       fbInfo.height = extent.height;
       fbInfo.layers = 1;
-      m_scene_framebuffers[i] = m_device->device().createFramebuffer(fbInfo);
+      m_scene_framebuffers[i] = m_renderer->device().device().createFramebuffer(fbInfo);
     }
   }
 
   // Create composite render pass and framebuffers
   m_composite_renderpass = sps::vulkan::make_composite_renderpass(
-    m_device->device(), m_swapchain->image_format(), true);
+    m_renderer->device().device(), m_renderer->swapchain().image_format(), true);
   create_composite_framebuffers();
 
   // Create composite pipeline (tone mapping + gamma)
   create_composite_pipeline();
 
-  m_commandPool = sps::vulkan::make_command_pool(*m_device, m_debugMode);
+  m_commandPool = sps::vulkan::make_command_pool(m_renderer->device(), m_debugMode);
 
   m_mainCommandBuffer = sps::vulkan::make_command_buffers(
-    *m_device, *m_swapchain, m_commandPool, m_commandBuffers, true);
+    m_renderer->device(), m_renderer->swapchain(), m_commandPool, m_commandBuffers, true);
 
-  m_inFlight = std::make_unique<Fence>(*m_device, "in-flight", true);
-  m_imageAvailable = std::make_unique<Semaphore>(*m_device, "image-available");
-  m_renderFinished.resize(m_swapchain->image_count());
-  for (std::uint32_t i = 0; i < m_swapchain->image_count(); i++)
+  m_inFlight = std::make_unique<Fence>(m_renderer->device(), "in-flight", true);
+  m_imageAvailable = std::make_unique<Semaphore>(m_renderer->device(), "image-available");
+  m_renderFinished.resize(m_renderer->swapchain().image_count());
+  for (std::uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
   {
-    m_renderFinished[i] = std::make_unique<Semaphore>(*m_device, "render-finished-" + std::to_string(i));
+    m_renderFinished[i] = std::make_unique<Semaphore>(m_renderer->device(), "render-finished-" + std::to_string(i));
   }
 
   // Create SSS blur resources (needs command pool for one-shot layout transition)
@@ -2308,8 +2213,8 @@ void Application::finalize_setup()
   create_debug_2d_pipeline();
 
 #if 1 // Enable ray tracing
-  spdlog::info("RT init check: supports_rt={}", m_device->supports_ray_tracing());
-  if (m_device->supports_ray_tracing())
+  spdlog::info("RT init check: supports_rt={}", m_renderer->device().supports_ray_tracing());
+  if (m_renderer->device().supports_ray_tracing())
   {
     spdlog::info("Starting RT initialization...");
     build_acceleration_structures();
@@ -2323,7 +2228,7 @@ void Application::finalize_setup()
   // Register render stages
   // Order within each phase doesn't matter — the render graph groups by phase.
   m_ray_tracing_stage = m_render_graph.add<RayTracingStage>(
-    &m_use_raytracing, m_device.get(), m_rt_pipeline.get(), &m_rt_image, &m_rt_descriptor_set);
+    &m_use_raytracing, &m_renderer->device(), m_rt_pipeline.get(), &m_rt_image, &m_rt_descriptor_set);
   m_raster_opaque_stage = m_render_graph.add<RasterOpaqueStage>(
     &m_use_raytracing, &m_debug_2d_mode, m_pipeline);
   m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
@@ -2343,52 +2248,52 @@ void Application::finalize_setup()
 
 VkInstance Application::vk_instance() const
 {
-  return m_instance->instance();
+  return m_renderer->instance().instance();
 }
 
 VkPhysicalDevice Application::vk_physical_device() const
 {
-  return m_device->physicalDevice();
+  return m_renderer->device().physicalDevice();
 }
 
 VkDevice Application::vk_device() const
 {
-  return m_device->device();
+  return m_renderer->device().device();
 }
 
 VkQueue Application::vk_graphics_queue() const
 {
-  return m_device->graphics_queue();
+  return m_renderer->device().graphics_queue();
 }
 
 uint32_t Application::graphics_queue_family() const
 {
-  return m_device->m_graphics_queue_family_index;
+  return m_renderer->device().m_graphics_queue_family_index;
 }
 
 uint32_t Application::swapchain_image_count() const
 {
-  return static_cast<uint32_t>(m_swapchain->images().size());
+  return static_cast<uint32_t>(m_renderer->swapchain().images().size());
 }
 
 GLFWwindow* Application::glfw_window() const
 {
-  return m_window->get();
+  return m_renderer->window().get();
 }
 
 bool Application::should_close() const
 {
-  return m_window->should_close();
+  return m_renderer->window().should_close();
 }
 
 void Application::poll_events()
 {
-  m_window->poll();
+  m_renderer->window().poll();
 }
 
 void Application::wait_idle()
 {
-  m_device->wait_idle();
+  m_renderer->device().wait_idle();
 }
 
 void Application::update_frame()
@@ -2399,10 +2304,10 @@ void Application::update_frame()
 
 void Application::set_vsync(bool enabled)
 {
-  if (m_vsync_enabled != enabled)
+  if (m_renderer->vsync_enabled() != enabled)
   {
-    m_vsync_enabled = enabled;
-    m_swapchain->set_vsync(enabled);
+    m_renderer->vsync_enabled() = enabled;
+    m_renderer->swapchain().set_vsync(enabled);
     recreate_swapchain();
   }
 }

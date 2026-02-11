@@ -59,7 +59,7 @@ Window::~Window()
   glfwDestroyWindow(m_window);
   glfwTerminate();
 }
-bool Window::should_close()
+bool Window::should_close() const
 {
   return glfwWindowShouldClose(m_window) == GLFW_TRUE;
 }

@@ -56,12 +56,14 @@ struct UniformBufferObject
   glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=tonemapMode, w=useSSS)
 };
 
-class Application : public VulkanRenderer
+class Application
 {
 private:
+  std::unique_ptr<VulkanRenderer> m_renderer;
+
+  static RendererConfig build_renderer_config(int argc, char** argv, AppConfig& app_config);
   void apply_config(AppConfig config);
   bool m_stop_on_validation_message{ false };
-  std::string m_preferred_gpu;
   std::string m_geometry_source{"triangle"};
   std::string m_ply_file;
   std::string m_gltf_file;
@@ -132,7 +134,7 @@ public:
   bool& show_light_indicator() { return m_show_light_indicator; }
   glm::vec3& clear_color() { return m_clear_color; }
   Camera& camera() { return m_camera; }
-  bool vsync_enabled() const { return m_vsync_enabled; }
+  bool vsync_enabled() const { return m_renderer->vsync_enabled(); }
   void set_vsync(bool enabled);
 
   // Model switching

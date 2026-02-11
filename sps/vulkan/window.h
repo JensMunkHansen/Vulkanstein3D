@@ -59,6 +59,6 @@ public:
 
   static void poll();
 
-  bool should_close();
+  bool should_close() const;
 };
 }
