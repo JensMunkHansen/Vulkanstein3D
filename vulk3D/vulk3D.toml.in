@@ -110,6 +110,7 @@ files = [
       "@DATA_DIR@/ScatteringSkull/glTF-Binary/ScatteringSkull.glb",
       "@DATA_DIR@/DiffuseTransmissionPlant/DiffuseTransmissionPlant.glb",
       "@LOCAL_DATA_DIR@/LowerJawScan/LowerJawScan.gltf",
+      "@DATA_DIR@/SSSTestSphere/SSSTestSphere.gltf",
 ]
 
 [HDRenvironments]

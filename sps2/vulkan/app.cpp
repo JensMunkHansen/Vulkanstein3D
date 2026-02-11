@@ -15,7 +15,9 @@ Application::Application(int argc, char** argv)
   spdlog::trace("Initialising vulkan-renderer");
   bool enable_renderdoc_instance_layer = false;
 
-  m_window_title = "TESTME";
+  m_renderer.set_window_title("TESTME");
+  m_renderer.set_window_width(640);
+  m_renderer.set_window_height(480);
 
   sps::tools::CommandLineArgumentParser cla_parser;
   cla_parser.parse_args(argc, argv);
@@ -55,16 +57,14 @@ Application::Application(int argc, char** argv)
 
   spdlog::trace("Creating Vulkan instance");
 
-  m_window_width = 640;
-  m_window_height = 480;
+  m_renderer.set_window(std::make_unique<sps::vulkan::Window>(
+    m_renderer.window_title(), m_renderer.window_width(), m_renderer.window_height(),
+    true, true, m_renderer.window_mode()));
 
-  m_window = std::make_unique<sps::vulkan::Window>(
-    m_window_title, m_window_width, m_window_height, true, true, m_window_mode);
-
-  m_instance = std::make_unique<sps::vulkan::Instance>(APP_NAME, ENGINE_NAME,
+  m_renderer.set_instance(std::make_unique<sps::vulkan::Instance>(APP_NAME, ENGINE_NAME,
     VK_MAKE_API_VERSION(0, APP_VERSION[0], APP_VERSION[1], APP_VERSION[2]),
     VK_MAKE_API_VERSION(0, ENGINE_VERSION[0], ENGINE_VERSION[1], ENGINE_VERSION[2]),
-    m_enable_validation_layers, enable_renderdoc_instance_layer);
+    m_enable_validation_layers, enable_renderdoc_instance_layer));
 }
 
 void Application::load_toml_configuration_file(const std::string& file_name)
@@ -93,26 +93,26 @@ void Application::load_toml_configuration_file(const std::string& file_name)
     toml::find<std::string>(renderer_configuration, "application", "window", "mode");
   if (wmodestr == "windowed")
   {
-    m_window_mode = WindowMode::WINDOWED;
+    m_renderer.set_window_mode(WindowMode::WINDOWED);
   }
   else if (wmodestr == "windowed_fullscreen")
   {
-    m_window_mode = WindowMode::WINDOWED_FULLSCREEN;
+    m_renderer.set_window_mode(WindowMode::WINDOWED_FULLSCREEN);
   }
   else if (wmodestr == "fullscreen")
   {
-    m_window_mode = WindowMode::FULLSCREEN;
+    m_renderer.set_window_mode(WindowMode::FULLSCREEN);
   }
   else
   {
     spdlog::warn("Invalid application window mode: {}", wmodestr);
-    m_window_mode = WindowMode::WINDOWED;
+    m_renderer.set_window_mode(WindowMode::WINDOWED);
   }
 
-  m_window_width = toml::find<int>(renderer_configuration, "application", "window", "width");
-  m_window_height = toml::find<int>(renderer_configuration, "application", "window", "height");
-  m_window_title = toml::find<std::string>(renderer_configuration, "application", "window", "name");
-  spdlog::trace("Window: {}, {} x {}", m_window_title, m_window_width, m_window_height);
+  m_renderer.set_window_width(toml::find<int>(renderer_configuration, "application", "window", "width"));
+  m_renderer.set_window_height(toml::find<int>(renderer_configuration, "application", "window", "height"));
+  m_renderer.set_window_title(toml::find<std::string>(renderer_configuration, "application", "window", "name"));
+  spdlog::trace("Window: {}, {} x {}", m_renderer.window_title(), m_renderer.window_width(), m_renderer.window_height());
 
 #if 0
   m_texture_files =
