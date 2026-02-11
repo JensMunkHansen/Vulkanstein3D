@@ -28,6 +28,7 @@ set(SHADERS
   debug_emissive.frag
   debug_thickness.frag
   debug_sss.frag
+  debug_stencil.frag
   fullscreen_quad.vert
   debug_texture2d.frag
 )

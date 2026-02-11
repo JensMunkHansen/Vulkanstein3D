@@ -8,6 +8,7 @@
 
 #include <sps/vulkan/acceleration_structure.h>
 #include <sps/vulkan/app_config.h>
+#include <sps/vulkan/depth_stencil_attachment.h>
 #include <sps/vulkan/camera.h>
 #include <sps/vulkan/command_registry.h>
 #include <sps/vulkan/descriptor_builder.h>
@@ -125,7 +126,9 @@ public:
   static constexpr const char* tonemap_names[] = { "None", "Reinhard", "ACES (Fast)", "ACES (Hill)",
     "ACES + Boost", "Khronos PBR Neutral" };
   bool& use_sss_blur() { return m_use_sss_blur; }
-  float& sss_blur_width() { return m_sss_blur_width; }
+  float& sss_blur_width_r() { return m_sss_blur_width_r; }
+  float& sss_blur_width_g() { return m_sss_blur_width_g; }
+  float& sss_blur_width_b() { return m_sss_blur_width_b; }
   bool& show_light_indicator() { return m_show_light_indicator; }
   glm::vec3& clear_color() { return m_clear_color; }
   Camera& camera() { return m_camera; }
@@ -221,7 +224,7 @@ private:
   bool m_debugMode = true;
   bool m_backfaceCulling = true;
   bool m_depthTestEnabled = true;
-  vk::Format m_depthFormat = vk::Format::eD32Sfloat;
+  vk::Format m_depthFormat = vk::Format::eD32SfloatS8Uint;
   double m_lastTime, m_currentTime;
   int m_numFrames;
   float m_frameTime;
@@ -264,8 +267,15 @@ private:
   vk::DescriptorSetLayout m_sss_blur_descriptor_layout{ VK_NULL_HANDLE };
   vk::DescriptorSet m_sss_blur_h_descriptor{ VK_NULL_HANDLE }; // HDR→ping
   vk::DescriptorSet m_sss_blur_v_descriptor{ VK_NULL_HANDLE }; // ping→HDR
+  vk::Sampler m_sss_stencil_sampler{ VK_NULL_HANDLE };
   bool m_use_sss_blur{ false };
-  float m_sss_blur_width{ 0.5f };
+  // Per-channel blur widths for screen-space SSS (pixel scale multipliers).
+  // Ratio ~5:2:1 matches skin scattering distances (Jimenez "Separable SSS"):
+  //   Red ~3.67mm, Green ~1.37mm, Blue ~0.68mm
+  // Actual pixel spread = offset[i] * blurWidth, where offset goes 0..12.
+  float m_sss_blur_width_r{ 2.5f };
+  float m_sss_blur_width_g{ 1.0f };
+  float m_sss_blur_width_b{ 0.5f };
   vk::Extent2D m_blur_extent{};
 
   // 2D debug pipeline (fullscreen quad)
@@ -275,10 +285,8 @@ private:
   // MSAA
   vk::SampleCountFlagBits m_msaaSamples{ vk::SampleCountFlagBits::e1 };
 
-  // Depth buffer
-  vk::Image m_depthImage;
-  vk::DeviceMemory m_depthImageMemory;
-  vk::ImageView m_depthImageView;
+  // Depth-stencil buffer (RAII — owns image, memory, and aspect views)
+  std::unique_ptr<DepthStencilAttachment> m_depthStencil;
   vk::CommandPool m_commandPool;
   vk::CommandBuffer m_mainCommandBuffer;
   std::vector<vk::CommandBuffer> m_commandBuffers{};

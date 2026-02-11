@@ -1,17 +1,40 @@
 #version 450
 
-// Separable blur for screen-space subsurface scattering
-// Phase 2: blurs the entire HDR image (no masking)
+// Separable blur for screen-space subsurface scattering (SSS)
+//
+// Simulates lateral light scattering inside translucent materials (skin, wax, marble).
+// Light enters the surface, scatters sideways through the medium, and exits at a
+// different point. Different wavelengths scatter different distances:
+//   Red   ~3.67mm  (blood in dermis — scatters furthest)
+//   Green ~1.37mm
+//   Blue  ~0.68mm
+// Ratio ~5:2:1 — default blurWidths: R=2.5, G=1.0, B=0.5
+//
+// References:
+//   - Jimenez et al., "Separable Subsurface Scattering" (2015)
+//   - d'Eon & Luebke, "Advanced Techniques for Realistic Real-Time Skin Rendering"
+//     GPU Gems 3, Chapter 14 (2007)
+//   - Barré-Brisebois & Bouchard, "Approximating Translucency for a Fast, Cheap
+//     and Convincing Subsurface Scattering Look" GDC 2011
+//
+// The fragment shader (fragment.frag) handles the thickness-dependent back-lighting
+// (Barré-Brisebois), while this blur pass handles the lateral scattering.
+// SSS masking: fragment shader writes alpha=1.0 for SSS materials, 0.0 otherwise.
+// HDR clear alpha=0.0 ensures background pixels are not blurred.
+//
 // Dispatch with workgroup size 16x16
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform readonly image2D inputImage;
+layout(set = 0, binding = 0, rgba16f) uniform readonly  image2D inputImage;
 layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 2)          uniform usampler2D sssMask;
 
 layout(push_constant) uniform PushConstants {
-  float blurWidth;  // Blur scale (1.0 = offsets in pixels as-is)
-  int direction;    // 0 = horizontal, 1 = vertical
+  float blurWidthR;   // Red scatters furthest  (~3mm skin)
+  float blurWidthG;   // Green medium           (~1mm)
+  float blurWidthB;   // Blue least             (~0.5mm)
+  int   direction;    // 0 = horizontal, 1 = vertical
 } pc;
 
 // 13-tap separable kernel (approximates a diffusion profile)
@@ -20,7 +43,7 @@ const float weights[KERNEL_SIZE] = float[](
   0.096, 0.094, 0.086, 0.074, 0.061, 0.047, 0.034,
   0.024, 0.015, 0.009, 0.005, 0.003, 0.001
 );
-// Offsets in pixels (scaled by blurWidth)
+// Offsets in pixels (scaled by per-channel blurWidth)
 const float offsets[KERNEL_SIZE] = float[](
   0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0,
   7.0, 8.0, 9.0, 10.0, 11.0, 12.0
@@ -34,26 +57,48 @@ void main()
   if (coord.x >= size.x || coord.y >= size.y)
     return;
 
+  // TODO: Stencil mask read (binding 2) is not working — texelFetch returns 0
+  // for all pixels. Investigate stencil-only ImageView sampling.
+  // For now, using alpha channel as the SSS mask (fragment shader writes
+  // alpha=1.0 for SSS materials, HDR clear alpha=0.0 for background).
+  // uint mask = texelFetch(sssMask, coord, 0).r;
+
   vec4 center = imageLoad(inputImage, coord);
-  vec4 result = center * weights[0];
+
+  // Fragment shader writes alpha=1.0 for SSS materials, 0.0 for non-SSS.
+  // The blur applies uniformly to all SSS pixels — lateral scattering depends on
+  // material scattering coefficients (per-channel blur widths), not thickness.
+  float blurMask = center.a;
+
+  // Non-SSS pixels (alpha=0 from HDR clear or non-SSS fragment): passthrough
+  if (blurMask <= 0.0)
+  {
+    imageStore(outputImage, coord, center);
+    return;
+  }
+
+  vec3 result = center.rgb * weights[0];
+
+  ivec2 dir = (pc.direction == 0) ? ivec2(1, 0) : ivec2(0, 1);
 
   for (int i = 1; i < KERNEL_SIZE; i++)
   {
-    int o = int(round(offsets[i] * pc.blurWidth));
-    if (o == 0) continue;
+    int oR = int(round(offsets[i] * pc.blurWidthR));
+    int oG = int(round(offsets[i] * pc.blurWidthG));
+    int oB = int(round(offsets[i] * pc.blurWidthB));
 
-    ivec2 offsetVec;
-    if (pc.direction == 0)
-      offsetVec = ivec2(o, 0);
-    else
-      offsetVec = ivec2(0, o);
+    // Per-channel sampling at different offsets
+    ivec2 c1R = clamp(coord + dir * oR, ivec2(0), size - 1);
+    ivec2 c2R = clamp(coord - dir * oR, ivec2(0), size - 1);
+    ivec2 c1G = clamp(coord + dir * oG, ivec2(0), size - 1);
+    ivec2 c2G = clamp(coord - dir * oG, ivec2(0), size - 1);
+    ivec2 c1B = clamp(coord + dir * oB, ivec2(0), size - 1);
+    ivec2 c2B = clamp(coord - dir * oB, ivec2(0), size - 1);
 
-    ivec2 c1 = clamp(coord + offsetVec, ivec2(0), size - 1);
-    ivec2 c2 = clamp(coord - offsetVec, ivec2(0), size - 1);
-
-    result += imageLoad(inputImage, c1) * weights[i];
-    result += imageLoad(inputImage, c2) * weights[i];
+    result.r += (imageLoad(inputImage, c1R).r + imageLoad(inputImage, c2R).r) * weights[i];
+    result.g += (imageLoad(inputImage, c1G).g + imageLoad(inputImage, c2G).g) * weights[i];
+    result.b += (imageLoad(inputImage, c1B).b + imageLoad(inputImage, c2B).b) * weights[i];
   }
 
-  imageStore(outputImage, coord, result);
+  imageStore(outputImage, coord, vec4(result, center.a));
 }

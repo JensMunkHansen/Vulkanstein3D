@@ -127,6 +127,7 @@ add_library(${TARGET_NAME}
   gltf_loader.cpp
   texture.cpp
   ibl.cpp
+  depth_stencil_attachment.cpp
   screenshot.cpp
   command_file.cpp
   acceleration_structure.cpp

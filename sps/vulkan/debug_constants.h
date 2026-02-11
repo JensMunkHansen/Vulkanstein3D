@@ -47,8 +47,9 @@ enum ShaderMode : int
   SHADER_DEBUG_EMISSIVE = 7,
   SHADER_DEBUG_THICKNESS = 8,
   SHADER_DEBUG_SSS = 9,
-  SHADER_2D_TEXTURE = 10,  // Fullscreen 2D texture view (not in 3D dropdown)
-  SHADER_COUNT = 11
+  SHADER_DEBUG_STENCIL = 10,
+  SHADER_2D_TEXTURE = 11,  // Fullscreen 2D texture view (not in 3D dropdown)
+  SHADER_COUNT = 12
 };
 
 // Number of 3D shaders shown in the UI dropdown (excludes 2D texture view)
@@ -85,6 +86,7 @@ inline constexpr const char* shader_names[] = {
   "Debug: Emissive",
   "Debug: Thickness",
   "Debug: SSS",
+  "Debug: Stencil",
   "2D Texture View"
 };
 
@@ -100,6 +102,7 @@ inline const char* vertex_shaders[] = {
   SHADER_DIR "vertex.spv",           // Debug Emissive
   SHADER_DIR "vertex.spv",           // Debug Thickness
   SHADER_DIR "vertex.spv",           // Debug SSS
+  SHADER_DIR "vertex.spv",           // Debug Stencil
   SHADER_DIR "fullscreen_quad.spv"   // 2D Texture
 };
 
@@ -114,6 +117,7 @@ inline const char* fragment_shaders[] = {
   SHADER_DIR "debug_emissive.spv",
   SHADER_DIR "debug_thickness.spv",
   SHADER_DIR "debug_sss.spv",
+  SHADER_DIR "debug_stencil.spv",
   SHADER_DIR "debug_texture2d.spv"
 };
 

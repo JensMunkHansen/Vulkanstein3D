@@ -70,11 +70,12 @@ void RenderGraph::record(const FrameContext& ctx)
   {
     // 3 clear values: color, depth, resolve (extra values ignored when not using MSAA)
     std::array<vk::ClearValue, 3> clearValues{};
+    // Alpha=0: background pixels have no SSS blur (blur shader reads alpha as blur scale)
     clearValues[0].color = vk::ClearColorValue{
-      std::array<float, 4>{ ctx.clear_color.r, ctx.clear_color.g, ctx.clear_color.b, 1.0f } };
+      std::array<float, 4>{ ctx.clear_color.r, ctx.clear_color.g, ctx.clear_color.b, 0.0f } };
     clearValues[1].depthStencil = vk::ClearDepthStencilValue{ 1.0f, 0 };
     clearValues[2].color = vk::ClearColorValue{
-      std::array<float, 4>{ ctx.clear_color.r, ctx.clear_color.g, ctx.clear_color.b, 1.0f } };
+      std::array<float, 4>{ ctx.clear_color.r, ctx.clear_color.g, ctx.clear_color.b, 0.0f } };
 
     begin_render_pass(ctx, ctx.scene_render_pass, ctx.scene_framebuffer,
       static_cast<uint32_t>(clearValues.size()), clearValues.data());

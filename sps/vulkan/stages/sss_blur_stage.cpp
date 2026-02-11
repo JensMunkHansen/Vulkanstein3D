@@ -31,19 +31,46 @@ void SSSBlurStage::record(const FrameContext& ctx)
       {}, {}, {}, barrier);
   }
 
+  // Transition depth-stencil to read-only for stencil sampling in compute
+  {
+    vk::ImageMemoryBarrier dsBarrier{};
+    dsBarrier.oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+    dsBarrier.newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+    dsBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    dsBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    dsBarrier.image = m_depth_stencil_image;
+    dsBarrier.subresourceRange.aspectMask =
+      vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+    dsBarrier.subresourceRange.baseMipLevel = 0;
+    dsBarrier.subresourceRange.levelCount = 1;
+    dsBarrier.subresourceRange.baseArrayLayer = 0;
+    dsBarrier.subresourceRange.layerCount = 1;
+    dsBarrier.srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+    dsBarrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+    cmd.pipelineBarrier(
+      vk::PipelineStageFlagBits::eLateFragmentTests,
+      vk::PipelineStageFlagBits::eComputeShader,
+      {}, {}, {}, dsBarrier);
+  }
+
   uint32_t groupsX = (w + 15) / 16;
   uint32_t groupsY = (h + 15) / 16;
 
   struct BlurPushConstants
   {
-    float blurWidth;
+    float blurWidthR;
+    float blurWidthG;
+    float blurWidthB;
     int direction;
   } pc{};
-  pc.blurWidth = *m_blur_width;
+  pc.blurWidthR = *m_blur_width_r;
+  pc.blurWidthG = *m_blur_width_g;
+  pc.blurWidthB = *m_blur_width_b;
 
   cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline);
 
-  // Pass 1: Horizontal (HDR → ping)
+  // Pass 1: Horizontal (HDR -> ping)
   pc.direction = 0;
   cmd.pushConstants(m_layout, vk::ShaderStageFlagBits::eCompute, 0,
     static_cast<uint32_t>(sizeof(pc)), &pc);
@@ -61,7 +88,7 @@ void SSSBlurStage::record(const FrameContext& ctx)
       {}, memBarrier, {}, {});
   }
 
-  // Pass 2: Vertical (ping → HDR)
+  // Pass 2: Vertical (ping -> HDR)
   pc.direction = 1;
   cmd.pushConstants(m_layout, vk::ShaderStageFlagBits::eCompute, 0,
     static_cast<uint32_t>(sizeof(pc)), &pc);
@@ -89,6 +116,9 @@ void SSSBlurStage::record(const FrameContext& ctx)
       vk::PipelineStageFlagBits::eFragmentShader,
       {}, {}, {}, barrier);
   }
+
+  // No need to transition depth-stencil back — scene render pass has
+  // initialLayout = eUndefined which discards old content
 }
 
 } // namespace sps::vulkan

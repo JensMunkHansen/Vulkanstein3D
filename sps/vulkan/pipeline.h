@@ -33,6 +33,9 @@ struct GraphicsPipelineInBundle
   bool depthWriteEnabled{ true };
   vk::Format depthFormat{ vk::Format::eD32Sfloat };
 
+  // Stencil write (for SSS masking — writes stencil ref per draw)
+  bool stencilWriteEnabled{ false };
+
   // Blending
   bool blendEnabled{ false };
 

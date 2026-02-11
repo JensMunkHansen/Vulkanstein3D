@@ -54,6 +54,8 @@ layout(push_constant) uniform PushConstants {
   float iridescenceIor;        //  4 bytes
   float iridescenceThicknessMin; // 4 bytes
   float iridescenceThicknessMax; // 4 bytes
+  // TODO: transmissionFactor is currently a per-material scalar from glTF.
+  // Replace with a per-pixel transmission texture for spatially-varying SSS control.
   float transmissionFactor;      // 4 bytes
   float thicknessFactor;         // 4 bytes
   uint attenuationColorPacked;   // 4 bytes  R8G8B8 packed unorm
@@ -340,7 +342,7 @@ void main()
     // Thickness texture is in [0,1], thicknessFactor scales to world units
     float thickness = texture(thicknessTexture, fragTexCoord).g * pc.thicknessFactor;
     // Exponential falloff: even thick areas transmit some light
-    float transmission = exp(-thickness * 3.0);
+    float transmission = exp(-thickness * 1.5);
     vec3 attColor = unpackColor(pc.attenuationColorPacked);
 
     // Barré-Brisebois wrap lighting
@@ -414,17 +416,26 @@ void main()
 
   // Output linear HDR (tone mapping + gamma applied in composite pass)
 
+  // SSS blur mask in alpha: 1.0 for SSS materials, 0.0 for non-SSS.
+  // The screen-space blur simulates lateral light scattering, which is uniform across
+  // the SSS surface (depends on scattering coefficients, not thickness).
+  // Thickness modulates the SSS *lighting* contribution above (Barré-Brisebois),
+  // while the blur spreads whatever colors are rendered, including direct/IBL lighting.
+  // TODO: Replace transmissionFactor scalar with a per-pixel transmission texture
+  // for spatially-varying SSS masking within a single material.
+  float blurMask = (pc.transmissionFactor > 0.0) ? 1.0 : 0.0;
+
   // Alpha mode handling (late discard per Khronos reference)
   uint alphaModeValue = pc.alphaMode & 3u;  // Mask off doubleSided bit
   if (alphaModeValue == 1u) {
     // MASK: discard fragments below cutoff
     if (baseColor.a < pc.alphaCutoff) discard;
-    outColor = vec4(color, 1.0);
+    outColor = vec4(color, blurMask);
   } else if (alphaModeValue == 2u) {
-    // BLEND: output with alpha for blending
+    // BLEND: output with alpha for blending (can't use alpha for blur mask here)
     outColor = vec4(color, baseColor.a);
   } else {
-    // OPAQUE (default)
-    outColor = vec4(color, 1.0);
+    // OPAQUE (default): alpha carries SSS blur mask (0.0 = no blur, 1.0 = blur)
+    outColor = vec4(color, blurMask);
   }
 }

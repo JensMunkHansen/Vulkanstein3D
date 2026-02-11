@@ -186,14 +186,14 @@ vk::RenderPass make_scene_renderpass(vk::Device device, vk::Format hdrFormat,
     : vk::ImageLayout::eShaderReadOnlyOptimal;
   attachments.push_back(colorAttachment);
 
-  // Attachment 1: Depth
+  // Attachment 1: Depth-stencil
   vk::AttachmentDescription depthAttachment{};
   depthAttachment.format = depthFormat;
   depthAttachment.samples = msaaSamples;
   depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
   depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
-  depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
-  depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+  depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eClear;
+  depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eStore;
   depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
   depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
   attachments.push_back(depthAttachment);
@@ -411,6 +411,21 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   depthStencil.depthCompareOp = vk::CompareOp::eLess;
   depthStencil.depthBoundsTestEnable = VK_FALSE;
   depthStencil.stencilTestEnable = VK_FALSE;
+
+  if (specification.stencilWriteEnabled)
+  {
+    depthStencil.stencilTestEnable = VK_TRUE;
+    vk::StencilOpState stencilOp{};
+    stencilOp.compareOp = vk::CompareOp::eAlways;
+    stencilOp.passOp = vk::StencilOp::eReplace;
+    stencilOp.failOp = vk::StencilOp::eKeep;
+    stencilOp.depthFailOp = vk::StencilOp::eKeep;
+    stencilOp.compareMask = 0xFF;
+    stencilOp.writeMask = 0xFF;
+    depthStencil.front = stencilOp;
+    depthStencil.back = stencilOp;
+  }
+
   pipelineInfo.pDepthStencilState = &depthStencil;
 
   // Color Blend
@@ -500,6 +515,10 @@ GraphicsPipelineOutBundle create_graphics_pipeline(
   if (specification.dynamicCullMode)
   {
     dynamicStates.push_back(vk::DynamicState::eCullModeEXT);
+  }
+  if (specification.stencilWriteEnabled)
+  {
+    dynamicStates.push_back(vk::DynamicState::eStencilReference);
   }
   vk::PipelineDynamicStateCreateInfo dynamicState = {};
   dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());

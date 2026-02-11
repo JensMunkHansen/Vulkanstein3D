@@ -324,49 +324,10 @@ void Application::create_depth_resources()
 {
   vk::Extent2D extent = m_swapchain->extent();
 
-  // Create depth image
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.format = m_depthFormat;
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-  imageInfo.usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
-  imageInfo.samples = m_msaaSamples;
-  imageInfo.sharingMode = vk::SharingMode::eExclusive;
+  m_depthStencil = std::make_unique<DepthStencilAttachment>(
+    *m_device, m_depthFormat, extent, m_msaaSamples);
 
-  m_depthImage = m_device->device().createImage(imageInfo);
-
-  // Allocate memory
-  vk::MemoryRequirements memRequirements =
-    m_device->device().getImageMemoryRequirements(m_depthImage);
-
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
-    memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_depthImageMemory = m_device->device().allocateMemory(allocInfo);
-  m_device->device().bindImageMemory(m_depthImage, m_depthImageMemory, 0);
-
-  // Create image view
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_depthImage;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_depthFormat;
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_depthImageView = m_device->device().createImageView(viewInfo);
-
-  spdlog::trace("Created depth buffer {}x{}", extent.width, extent.height);
+  spdlog::trace("Created depth-stencil buffer {}x{}", extent.width, extent.height);
 }
 
 void Application::create_msaa_color_resources()
@@ -705,10 +666,10 @@ void Application::create_blur_resources()
     dev.freeCommandBuffers(m_commandPool, cmd);
   }
 
-  // Create descriptor set layout (2 storage images)
+  // Create descriptor set layout (2 storage images + 1 combined image sampler for stencil)
   if (!m_sss_blur_descriptor_layout)
   {
-    std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
+    std::array<vk::DescriptorSetLayoutBinding, 3> bindings{};
     bindings[0].binding = 0;
     bindings[0].descriptorType = vk::DescriptorType::eStorageImage;
     bindings[0].descriptorCount = 1;
@@ -717,6 +678,10 @@ void Application::create_blur_resources()
     bindings[1].descriptorType = vk::DescriptorType::eStorageImage;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = vk::ShaderStageFlagBits::eCompute;
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
@@ -724,17 +689,31 @@ void Application::create_blur_resources()
     m_sss_blur_descriptor_layout = dev.createDescriptorSetLayout(layoutInfo);
   }
 
-  // Create descriptor pool (2 sets, 4 storage images total)
+  // Create stencil sampler (nearest, clamp-to-edge)
+  if (!m_sss_stencil_sampler)
+  {
+    vk::SamplerCreateInfo samplerInfo{};
+    samplerInfo.magFilter = vk::Filter::eNearest;
+    samplerInfo.minFilter = vk::Filter::eNearest;
+    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
+    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
+    m_sss_stencil_sampler = dev.createSampler(samplerInfo);
+  }
+
+  // Create descriptor pool (2 sets, 4 storage images + 2 combined image samplers)
   if (!m_sss_blur_descriptor_pool)
   {
-    vk::DescriptorPoolSize poolSize{};
-    poolSize.type = vk::DescriptorType::eStorageImage;
-    poolSize.descriptorCount = 4;
+    std::array<vk::DescriptorPoolSize, 2> poolSizes{};
+    poolSizes[0].type = vk::DescriptorType::eStorageImage;
+    poolSizes[0].descriptorCount = 4;
+    poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
+    poolSizes[1].descriptorCount = 2;
 
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.maxSets = 2;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     m_sss_blur_descriptor_pool = dev.createDescriptorPool(poolInfo);
   }
   else
@@ -752,7 +731,7 @@ void Application::create_blur_resources()
   m_sss_blur_h_descriptor = sets[0]; // H pass: read HDR, write ping
   m_sss_blur_v_descriptor = sets[1]; // V pass: read ping, write HDR
 
-  // Update H descriptor: binding 0 = HDR (read), binding 1 = ping (write)
+  // Update H descriptor: binding 0 = HDR (read), binding 1 = ping (write), binding 2 = stencil
   vk::DescriptorImageInfo hdrInfo{};
   hdrInfo.imageView = m_hdrImageView;
   hdrInfo.imageLayout = vk::ImageLayout::eGeneral;
@@ -761,7 +740,12 @@ void Application::create_blur_resources()
   pingInfo.imageView = m_blurPingImageView;
   pingInfo.imageLayout = vk::ImageLayout::eGeneral;
 
-  std::array<vk::WriteDescriptorSet, 4> writes{};
+  vk::DescriptorImageInfo stencilInfo{};
+  stencilInfo.sampler = m_sss_stencil_sampler;
+  stencilInfo.imageView = m_depthStencil->stencil_view();
+  stencilInfo.imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+
+  std::array<vk::WriteDescriptorSet, 6> writes{};
   writes[0].dstSet = m_sss_blur_h_descriptor;
   writes[0].dstBinding = 0;
   writes[0].descriptorCount = 1;
@@ -774,17 +758,29 @@ void Application::create_blur_resources()
   writes[1].descriptorType = vk::DescriptorType::eStorageImage;
   writes[1].pImageInfo = &pingInfo;
 
-  writes[2].dstSet = m_sss_blur_v_descriptor;
-  writes[2].dstBinding = 0;
+  writes[2].dstSet = m_sss_blur_h_descriptor;
+  writes[2].dstBinding = 2;
   writes[2].descriptorCount = 1;
-  writes[2].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[2].pImageInfo = &pingInfo;
+  writes[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+  writes[2].pImageInfo = &stencilInfo;
 
   writes[3].dstSet = m_sss_blur_v_descriptor;
-  writes[3].dstBinding = 1;
+  writes[3].dstBinding = 0;
   writes[3].descriptorCount = 1;
   writes[3].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[3].pImageInfo = &hdrInfo;
+  writes[3].pImageInfo = &pingInfo;
+
+  writes[4].dstSet = m_sss_blur_v_descriptor;
+  writes[4].dstBinding = 1;
+  writes[4].descriptorCount = 1;
+  writes[4].descriptorType = vk::DescriptorType::eStorageImage;
+  writes[4].pImageInfo = &hdrInfo;
+
+  writes[5].dstSet = m_sss_blur_v_descriptor;
+  writes[5].dstBinding = 2;
+  writes[5].descriptorCount = 1;
+  writes[5].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+  writes[5].pImageInfo = &stencilInfo;
 
   dev.updateDescriptorSets(writes, {});
 
@@ -794,7 +790,7 @@ void Application::create_blur_resources()
     vk::PushConstantRange pcRange{};
     pcRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
     pcRange.offset = 0;
-    pcRange.size = 8; // float blurWidth + int direction
+    pcRange.size = 16; // 3x float blurWidth (R,G,B) + int direction
 
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.setLayoutCount = 1;
@@ -1398,10 +1394,8 @@ void Application::recreate_swapchain()
     m_device->device().destroyFramebuffer(fb);
   m_composite_framebuffers.clear();
 
-  // 4. Destroy old depth resources
-  m_device->device().destroyImageView(m_depthImageView);
-  m_device->device().destroyImage(m_depthImage);
-  m_device->device().freeMemory(m_depthImageMemory);
+  // 4. Destroy old depth-stencil resources
+  m_depthStencil.reset();
 
   // 4b. Destroy old blur resources (depends on HDR image views)
   destroy_blur_resources();
@@ -1468,12 +1462,12 @@ void Application::recreate_swapchain()
       if (m_msaaSamples != vk::SampleCountFlagBits::e1)
       {
         // MSAA: [hdrMsaa, depth, hdrResolve]
-        attachments = { m_hdrMsaaImageView, m_depthImageView, m_hdrImageView };
+        attachments = { m_hdrMsaaImageView, m_depthStencil->combined_view(), m_hdrImageView };
       }
       else
       {
         // No MSAA: [hdr, depth]
-        attachments = { m_hdrImageView, m_depthImageView };
+        attachments = { m_hdrImageView, m_depthStencil->combined_view() };
       }
       vk::FramebufferCreateInfo fbInfo{};
       fbInfo.renderPass = m_scene_renderpass;
@@ -1505,11 +1499,12 @@ void Application::recreate_swapchain()
     m_device->device().updateDescriptorSets(write, {});
   }
 
-  // 9d. Recreate blur resources (needs HDR image + command pool)
+  // 9d. Recreate blur resources (needs HDR image + depth-stencil + command pool)
   create_blur_resources();
   if (m_sss_blur_stage)
   {
     m_sss_blur_stage->set_descriptors(m_sss_blur_h_descriptor, m_sss_blur_v_descriptor);
+    m_sss_blur_stage->set_depth_stencil_image(m_depthStencil->image());
   }
 
   // Update camera aspect ratio
@@ -1649,9 +1644,10 @@ void Application::make_pipeline(
   };
   specification.pushConstantRanges = { pcRange };
 
-  // Pipeline 1: opaque (no blend, depth write on)
+  // Pipeline 1: opaque (no blend, depth write on, stencil write for SSS masking)
   specification.blendEnabled = false;
   specification.depthWriteEnabled = true;
+  specification.stencilWriteEnabled = true;
 
   sps::vulkan::GraphicsPipelineOutBundle output =
     sps::vulkan::create_graphics_pipeline(specification, true);
@@ -1659,9 +1655,10 @@ void Application::make_pipeline(
   m_pipelineLayout = output.layout;
   m_pipeline = output.pipeline;
 
-  // Pipeline 2: blend (alpha blend on, depth write off, reuse layout + renderpass)
+  // Pipeline 2: blend (alpha blend on, depth write off, stencil disabled — preserves SSS stencil)
   specification.blendEnabled = true;
   specification.depthWriteEnabled = false;
+  specification.stencilWriteEnabled = false;
   specification.existingPipelineLayout = m_pipelineLayout;
 
   sps::vulkan::GraphicsPipelineOutBundle blendOutput =
@@ -2139,7 +2136,8 @@ void Application::apply_shader_mode(int mode)
     SHADER_DIR "vertex.spv",  // Debug AO
     SHADER_DIR "vertex.spv",  // Debug Emissive
     SHADER_DIR "vertex.spv",  // Debug Thickness
-    SHADER_DIR "vertex.spv"   // Debug SSS
+    SHADER_DIR "vertex.spv",  // Debug SSS
+    SHADER_DIR "vertex.spv"   // Debug Stencil
   };
   static const char* fragment_shaders[] = {
     SHADER_DIR "fragment.spv",
@@ -2151,7 +2149,8 @@ void Application::apply_shader_mode(int mode)
     SHADER_DIR "debug_ao.spv",
     SHADER_DIR "debug_emissive.spv",
     SHADER_DIR "debug_thickness.spv",
-    SHADER_DIR "debug_sss.spv"
+    SHADER_DIR "debug_sss.spv",
+    SHADER_DIR "debug_stencil.spv"
   };
 
   constexpr int num_shaders = sizeof(fragment_shaders) / sizeof(fragment_shaders[0]);
@@ -2203,10 +2202,8 @@ Application::~Application()
   for (auto fb : m_composite_framebuffers)
     m_device->device().destroyFramebuffer(fb);
 
-  // Destroy depth resources
-  m_device->device().destroyImageView(m_depthImageView);
-  m_device->device().destroyImage(m_depthImage);
-  m_device->device().freeMemory(m_depthImageMemory);
+  // Destroy depth-stencil resources
+  m_depthStencil.reset();
 
   // Destroy HDR resources (includes MSAA)
   destroy_hdr_resources();
@@ -2223,6 +2220,8 @@ Application::~Application()
     m_device->device().destroyDescriptorPool(m_sss_blur_descriptor_pool);
   if (m_sss_blur_descriptor_layout)
     m_device->device().destroyDescriptorSetLayout(m_sss_blur_descriptor_layout);
+  if (m_sss_stencil_sampler)
+    m_device->device().destroySampler(m_sss_stencil_sampler);
 
   // Destroy RT resources
   m_rt_pipeline.reset();
@@ -2264,11 +2263,11 @@ void Application::finalize_setup()
       std::vector<vk::ImageView> attachments;
       if (m_msaaSamples != vk::SampleCountFlagBits::e1)
       {
-        attachments = { m_hdrMsaaImageView, m_depthImageView, m_hdrImageView };
+        attachments = { m_hdrMsaaImageView, m_depthStencil->combined_view(), m_hdrImageView };
       }
       else
       {
-        attachments = { m_hdrImageView, m_depthImageView };
+        attachments = { m_hdrImageView, m_depthStencil->combined_view() };
       }
       vk::FramebufferCreateInfo fbInfo{};
       fbInfo.renderPass = m_scene_renderpass;
@@ -2330,10 +2329,10 @@ void Application::finalize_setup()
   m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
     &m_use_raytracing, &m_debug_2d_mode, m_blend_pipeline);
   m_sss_blur_stage = m_render_graph.add<SSSBlurStage>(
-    &m_use_sss_blur, &m_sss_blur_width,
+    &m_use_sss_blur, &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b,
     m_sss_blur_pipeline, m_sss_blur_pipelineLayout,
     m_sss_blur_h_descriptor, m_sss_blur_v_descriptor,
-    &m_hdrImage, &m_blur_extent);
+    &m_hdrImage, m_depthStencil->image(), &m_blur_extent);
   m_composite_stage = m_render_graph.add<CompositeStage>(
     m_composite_pipeline, m_composite_pipelineLayout,
     m_composite_descriptor_set, &m_exposure, &m_tonemap_mode);

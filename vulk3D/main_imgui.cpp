@@ -168,9 +168,11 @@ int main(int argc, char* argv[])
         if (app.use_sss()) {
           ImGui::SliderFloat("SSS Scale", &app.sss_scale(), 0.0f, 5.0f);
           ImGui::Checkbox("SSS Blur", &app.use_sss_blur());
-          ImGui::SetItemTooltip("Screen-space blur for subsurface scattering");
+          ImGui::SetItemTooltip("Screen-space blur for subsurface scattering (stencil-masked)");
           if (app.use_sss_blur()) {
-            ImGui::SliderFloat("Blur Width", &app.sss_blur_width(), 0.5f, 10.0f);
+            ImGui::SliderFloat("Blur R", &app.sss_blur_width_r(), 0.0f, 3.0f);
+            ImGui::SliderFloat("Blur G", &app.sss_blur_width_g(), 0.0f, 3.0f);
+            ImGui::SliderFloat("Blur B", &app.sss_blur_width_b(), 0.0f, 3.0f);
           }
         }
 

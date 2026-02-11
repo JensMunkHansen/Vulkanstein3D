@@ -51,6 +51,11 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
       ctx.command_buffer.setCullModeEXT(
         mat.doubleSided ? vk::CullModeFlagBits::eNone : vk::CullModeFlagBits::eBack);
 
+      // Write stencil=1 for SSS materials, stencil=0 for others
+      ctx.command_buffer.setStencilReference(
+        vk::StencilFaceFlagBits::eFrontAndBack,
+        mat.transmissionFactor > 0.0f ? 1u : 0u);
+
       pc.model = prim.modelMatrix;
       pc.baseColorFactor = mat.baseColorFactor;
       pc.metallicFactor = mat.metallicFactor;
@@ -82,6 +87,7 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
     // Legacy single-draw path: opaque defaults
     ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
     ctx.command_buffer.setCullModeEXT(vk::CullModeFlagBits::eBack);
+    ctx.command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, 0u);
 
     pc.model = glm::mat4(1.0f);
     pc.baseColorFactor = glm::vec4(1.0f);

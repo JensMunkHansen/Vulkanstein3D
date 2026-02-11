@@ -33,44 +33,106 @@ Required extensions:
 
 ## Render Graph
 
-Implemented with 5 fixed stages in `sps/vulkan/stages/`:
-- `RasterOpaqueStage` — OPAQUE + MASK primitives
-- `RasterBlendStage` — sorted BLEND primitives, depth write off
-- `Debug2DStage` — fullscreen quad texture viewer
-- `RayTracingStage` — trace + blit to swapchain
-- `UIStage` — ImGui callback
+4-phase execution with 7 stages in `sps/vulkan/stages/`:
+
+| Phase | Stage | What it does |
+|-------|-------|-------------|
+| PrePass | `RayTracingStage` | Trace + blit (outside render pass) |
+| ScenePass | `RasterOpaqueStage` | OPAQUE + MASK primitives → HDR target |
+| ScenePass | `RasterBlendStage` | Sorted BLEND primitives, depth write off |
+| Intermediate | `SSSBlurStage` | Separable 13-tap compute blur (H+V) |
+| CompositePass | `CompositeStage` | Fullscreen triangle: HDR → exposure → tonemap → gamma → swapchain |
+| CompositePass | `Debug2DStage` | Fullscreen quad texture viewer |
+| CompositePass | `UIStage` | ImGui callback |
+
+Scene renders to `m_hdrImage` (R16G16B16A16Sfloat). Composite samples it and writes to swapchain.
+Fragment shader outputs raw linear HDR; `composite.frag` does exposure + tone mapping + gamma.
 
 Stages registered in `finalize_setup()`, no-ops via `is_enabled()` + early returns.
 `FrameContext` passes per-frame data — stages don't own Vulkan resources.
 
 ### Future Improvements
+
+#### Near-term: Resource-aware graph
+The graph is currently a phase-ordered stage list with manual barriers. A middle ground before a full render graph:
+
+1. **Shared resource registry**: Graph holds references to shared images (HDR, DS, ping) instead of stages receiving raw `vk::Image` handles at construction. Stages query the graph for resources. This avoids stale handles during swapchain recreation.
+2. **Resource declarations**: Each stage declares what it reads/writes at registration time (e.g., `SSSBlurStage` reads HDR + DS stencil, writes ping). Graph validates declarations and can warn about missing barriers, but doesn't auto-generate them yet.
+3. **DepthStencilAttachment as graph resource**: The DS attachment is a shared resource used by scene pass (write depth+stencil), blur stage (read stencil), and implicitly by the next frame. The graph should know about it so swapchain recreation can update all dependents automatically.
+
+#### Medium-term: Stages own their resources
 - Stages could own their pipeline creation (currently in `app.cpp`)
 - RT stage could own its resources (storage image, descriptor, acceleration structures)
+- Each stage creates/destroys its own pipeline, descriptors, and intermediate images
+- `app.cpp` becomes a thin shell: window, device, swapchain, graph setup
+
+#### Long-term: Full render graph
 - Declarative resource creation (logical → physical during `compile()`)
+- Automatic barrier insertion from resource usage declarations
+- Automatic layout transitions (no manual `pipelineBarrier` in stages)
+- Resource aliasing (reuse memory for non-overlapping lifetimes)
 - Compute stages for IBL regeneration, post-processing
 
-## Future: Subsurface Scattering (KHR_materials_subsurface)
+## Subsurface Scattering
 
-`KHR_materials_subsurface` is a draft glTF extension (not yet ratified, [PR #1928](https://github.com/KhronosGroup/glTF/pull/1928)). Split out from `KHR_materials_volume` for independent scattering vs absorption control. Requires `KHR_materials_thickness`.
-
-Based on Barré-Brisebois & Bouchard's screen-space approximation (GDC 2011) — a wrap-lighting trick, not full multi-scatter. Parameters: scale, distortion, power, color.
+`KHR_materials_subsurface` is a draft glTF extension (not yet ratified, [PR #1928](https://github.com/KhronosGroup/glTF/pull/1928)). Split out from `KHR_materials_volume` for independent scattering vs absorption control.
 
 - [Spec draft](https://github.com/ux3d/glTF/tree/extensions/KHR_materials_subsurface/extensions/2.0/Khronos/KHR_materials_subsurface)
 - [ScatteringSkull sample model](https://github.com/KhronosGroup/glTF-Sample-Assets/blob/main/Models/ScatteringSkull/README.md)
 
-### Implementation Plan
-1. Parse `KHR_materials_volume` (thickness, attenuation) and `KHR_materials_diffuse_transmission` from glTF — replaces standalone thickness maps
-2. Add Barré-Brisebois back-lighting in the fragment shader using volume thickness + transmission factor
-3. Screen-space irradiance blur pass (see TODO below)
+### Implemented
+1. **glTF parsing**: `KHR_materials_volume` (thickness, attenuation) and `KHR_materials_transmission`. Fallback: infer transmissionFactor=1.0 when has_volume + thickness>0 (cgltf lacks `KHR_materials_diffuse_transmission`).
+2. **Barré-Brisebois back-lighting** (`fragment.frag`): `dot(V, -(L + N*distortion))^power` — visible when light is behind surface. Uses exponential thickness falloff `exp(-thickness * 1.5)`.
+3. **Screen-space blur with per-channel diffusion** (`sss_blur.comp`, `SSSBlurStage`):
+   - Separable 13-tap compute blur (H+V passes) in Intermediate phase
+   - Per-channel blur widths: R=2.5, G=1.0, B=0.5 (ratio 5:2:1, matching skin scattering distances)
+   - Red ~3.67mm, Green ~1.37mm, Blue ~0.68mm (Jimenez "Separable SSS", d'Eon/Luebke GPU Gems 3)
+   - SSS masking via HDR alpha channel: fragment shader writes alpha=1.0 for SSS materials (`transmissionFactor > 0`), 0.0 for non-SSS; HDR clear alpha=0.0
+   - Blur shader early-outs on alpha=0 (background + non-SSS objects passthrough)
+   - Blur is uniform across SSS surface (lateral scattering, independent of thickness)
+4. **DepthStencilAttachment** (`depth_stencil_attachment.h/cpp`): RAII class wrapping DS image with 3 aspect views (combined, depth-only, stencil-only). Format `eD32SfloatS8Uint`.
+5. **Stencil pipeline** (partially working): Opaque pipeline writes stencil=1 for SSS materials via dynamic `setStencilReference()`. Blend pipeline has stencil disabled (SSS stencil survives behind glass). However, stencil-only ImageView sampling in compute shader returns 0 — using alpha masking instead.
 
-### TODO: Screen-Space SSS Blur Pass
-Add a post-lighting compute or fullscreen-quad pass that blurs diffuse lighting for subsurface scattering materials. Key constraints:
-- Only blur pixels flagged as SSS materials (use a stencil bit or G-buffer flag to mask)
-- Depth-modulated blur radius (nearby = wider blur, distant = tighter)
-- Separable blur (horizontal + vertical) for performance — 2x7 samples instead of 7x7
-- Kernel weights should approximate a diffusion profile (not a simple Gaussian)
-- Would be a new render graph stage (`SSSBlurStage`) after the opaque lighting pass
-- Reference: `~/github/Rendering/AdvancedVulkanDemos/em_assets/shaders/scene_subsurface_scattering/SubSurfaceScatteringIrradianceFrag.glsl`
+### Known Issues
+- **Stencil read not working**: `texelFetch(usampler2D, ...)` on stencil-only ImageView returns 0 for all pixels. The stencil write pipeline is in place (render pass ops, pipeline state, dynamic reference) but reading it in the compute shader fails. Workaround: alpha channel masking. Investigate: may need `VK_KHR_maintenance2` for separate stencil usage, or copy stencil to R8 image.
+- **transmissionFactor is per-material scalar**: ScatteringSkull has T=1.0 on all materials, so the entire skull gets blurred uniformly. A per-pixel transmission texture would allow spatially-varying SSS within a single material.
+
+### Future SSS Improvements
+- **Per-pixel transmission texture**: Replace scalar `transmissionFactor` with a texture for spatially-varying SSS masking within a material
+- **Depth-modulated blur radius**: Scale blur width by depth — nearby surfaces get wider blur, distant surfaces tighter. Prevents distant objects looking overly blurry.
+- **Sum-of-Gaussians kernel**: Current kernel is a simple falloff. A proper diffusion profile uses sum-of-Gaussians fit (6 Gaussians per channel in Jimenez). Would improve physical accuracy.
+
+### Relevant code
+- Blur stage: `sps/vulkan/stages/sss_blur_stage.h/cpp`
+- Blur shader: `sps/vulkan/shaders/sss_blur.comp`
+- Fragment shader SSS: `sps/vulkan/shaders/fragment.frag` (Barré-Brisebois + alpha mask output)
+- Depth-stencil: `sps/vulkan/depth_stencil_attachment.h/cpp`
+- Debug: `sps/vulkan/shaders/debug_stencil.frag` (visualizes transmissionFactor per fragment)
+- HDR image: `m_hdrImage` (R16G16B16A16Sfloat, eColorAttachment | eSampled | eStorage)
+- Ping image: `m_blurPingImage` (same format, eStorage | eSampled)
+- Push constants: 3x float blurWidth (R/G/B) + int direction = 16 bytes
+
+## TODO: Incremental Scene Composition
+
+Support adding new elements (implants, prosthetics, additional anatomy) to an existing scene at runtime. Objects are static once placed — no per-frame transform animation needed.
+
+### Design Considerations
+
+**Mesh management**: Each added element is a separate glTF/PLY loaded alongside the existing scene. Separate VBO/IBO per object (simpler lifetime, no mega-buffer compaction). Draw calls append to the existing primitive list.
+
+**Materials and descriptors**: New objects bring their own materials and textures. Each gets its own descriptor set(s) following the existing per-material descriptor pattern. SSS properties (transmissionFactor, thickness) carry over naturally — new objects can be SSS or not.
+
+**Scene graph**: Currently `GltfScene` holds a flat list of nodes with transforms. Multi-object scenes need either:
+- A list of `GltfScene` objects (each self-contained, own transform hierarchy)
+- Or merge into a single scene graph with a per-object root transform
+
+The first approach is simpler and avoids index/buffer offset bookkeeping.
+
+**Acceleration structures (RT)**: Each object gets its own BLAS (built once). TLAS rebuilt when objects are added. Since no motion, TLAS is static after each addition — no per-frame rebuild needed.
+
+**Bounding box / camera**: Scene AABB is the union of all loaded objects. Camera reset uses the combined bounds.
+
+**What we don't need**: Per-frame transform updates, skinning/animation, dynamic buffer suballocation, object removal (add-only is sufficient for now).
 
 ## TODO: Wireframe Tube Impostors (VTK-style)
 Render mesh edges as 3D tubes using geometry shader impostors, toggleable at runtime.
