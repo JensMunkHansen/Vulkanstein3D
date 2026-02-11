@@ -257,12 +257,6 @@ Application::Application(int argc, char** argv)
   // Create depth buffer
   create_depth_resources();
 
-  // Create MSAA color image (if MSAA enabled)
-  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
-  {
-    create_msaa_color_resources();
-  }
-
   // Create uniform buffer and descriptor
   create_uniform_buffer();
 
