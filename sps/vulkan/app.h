@@ -6,7 +6,6 @@
 #include <sps/vulkan/config.h>
 #include <string>
 
-#include <sps/vulkan/acceleration_structure.h>
 #include <sps/vulkan/app_config.h>
 #include <sps/vulkan/camera.h>
 #include <sps/vulkan/command_registry.h>
@@ -14,7 +13,6 @@
 #include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/light.h>
 #include <sps/vulkan/mesh.h>
-#include <sps/vulkan/raytracing_pipeline.h>
 #include <sps/vulkan/render_graph.h>
 #include <sps/vulkan/renderer.h>
 #include <sps/vulkan/scene_manager.h>
@@ -50,7 +48,8 @@ struct UniformBufferObject
   glm::vec4
     material; // offset 320, size 16 (x=shininess, y=specStrength, z=metallicAmbient, w=aoStrength)
   glm::vec4 flags;      // offset 336, size 16 (x=useNormalMap, y=useEmissive, z=useAO, w=exposure)
-  glm::vec4 ibl_params; // offset 352, size 16 (x=useIBL, y=iblIntensity, z=tonemapMode, w=useSSS)
+  glm::vec4 ibl_params;   // offset 352, size 16 (x=useIBL, y=iblIntensity, z=tonemapMode, w=useSSS)
+  glm::vec4 clear_color;  // offset 368, size 16 (rgb=background color, a=unused)
 };
 
 class Application
@@ -74,8 +73,6 @@ private:
 public:
   Application(int argc, char* argv[]);
   void run();
-  void make_pipeline();
-  void make_pipeline(const std::string& vertex_shader, const std::string& fragment_shader);
   void finalize_setup();
   void recreate_swapchain();
   void record_draw_commands(vk::CommandBuffer, uint32_t imageIndex);
@@ -144,14 +141,11 @@ public:
   int current_hdr_index() const { return m_current_hdr_index; }
   void load_hdr(int index);
 
-  // Shader management
-  const std::string& current_vertex_shader() const { return m_vertex_shader_path; }
-  const std::string& current_fragment_shader() const { return m_fragment_shader_path; }
+  // Shader management (delegated to RasterOpaqueStage)
+  const std::string& current_vertex_shader() const;
+  const std::string& current_fragment_shader() const;
   void reload_shaders(const std::string& vertex_shader, const std::string& fragment_shader);
-
-  // Available shader modes for UI (must match main_imgui.cpp)
-  static constexpr int shader_mode_count = 8;
-  int& current_shader_mode() { return m_current_shader_mode; }
+  int current_shader_mode() const;
   void apply_shader_mode(int mode);
 
   // Screenshot
@@ -169,6 +163,7 @@ public:
   int& debug_channel_mode() { return m_debug_channel_mode; } // 0=RGB, 1=R, 2=G, 3=B, 4=A
   int& debug_material_index() { return m_debug_material_index; }
   int material_count() const { return m_scene_manager->material_count(); }
+  const AABB& scene_bounds() const { return m_scene_manager->bounds(); }
   float& debug_2d_zoom() { return m_debug_2d_zoom; }
   glm::vec2& debug_2d_pan() { return m_debug_2d_pan; }
   void reset_debug_2d_view()
@@ -196,16 +191,10 @@ public:
 private:
   void setup_camera();
   void create_uniform_buffer();
-  void create_blur_resources();
-  void destroy_blur_resources();
-  void create_debug_2d_pipeline();
+  void create_scene_renderpass();
+  void create_raster_stages();
   void create_light_indicator();
 
-  // Ray tracing setup
-  void create_rt_storage_image();
-  void create_rt_descriptor();
-  void create_rt_pipeline();
-  void build_acceleration_structures();
   void update_uniform_buffer();
   void process_input();
 
@@ -221,27 +210,14 @@ private:
   int m_numFrames;
   float m_frameTime;
 
-  // Scene render pass (HDR target)
+  // Scene render pass (HDR target) — pipelines owned by RasterOpaqueStage
+  // Scene framebuffers owned by RenderGraph
   vk::RenderPass m_scene_renderpass;
-  std::vector<vk::Framebuffer> m_scene_framebuffers;
-  vk::PipelineLayout m_pipelineLayout;
-  vk::Pipeline m_pipeline;
-  vk::Pipeline m_blend_pipeline; // blend on, depth write off
 
   // Composite render pass (swapchain target — shared via RenderGraph registry)
   vk::RenderPass m_composite_renderpass;
 
-  // SSS blur (compute, separable H+V)
-  vk::Image m_blurPingImage{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_blurPingImageMemory{ VK_NULL_HANDLE };
-  vk::ImageView m_blurPingImageView{ VK_NULL_HANDLE };
-  vk::Pipeline m_sss_blur_pipeline;
-  vk::PipelineLayout m_sss_blur_pipelineLayout;
-  vk::DescriptorPool m_sss_blur_descriptor_pool{ VK_NULL_HANDLE };
-  vk::DescriptorSetLayout m_sss_blur_descriptor_layout{ VK_NULL_HANDLE };
-  vk::DescriptorSet m_sss_blur_h_descriptor{ VK_NULL_HANDLE }; // HDR→ping
-  vk::DescriptorSet m_sss_blur_v_descriptor{ VK_NULL_HANDLE }; // ping→HDR
-  vk::Sampler m_sss_stencil_sampler{ VK_NULL_HANDLE };
+  // SSS blur UI controls (passed as const pointers to SSSBlurStage)
   bool m_use_sss_blur{ false };
   // Per-channel blur widths for screen-space SSS (pixel scale multipliers).
   // Ratio ~5:2:1 matches skin scattering distances (Jimenez "Separable SSS"):
@@ -250,11 +226,7 @@ private:
   float m_sss_blur_width_r{ 2.5f };
   float m_sss_blur_width_g{ 1.0f };
   float m_sss_blur_width_b{ 0.5f };
-  vk::Extent2D m_blur_extent{};
 
-  // 2D debug pipeline (fullscreen quad)
-  vk::Pipeline m_debug_2d_pipeline;
-  vk::PipelineLayout m_debug_2d_pipelineLayout;
 
   // Camera
   Camera m_camera;
@@ -268,21 +240,6 @@ private:
 
   // Uniform buffer (using wrapper)
   std::unique_ptr<UniformBuffer<UniformBufferObject>> m_uniform_buffer;
-
-  // Ray tracing resources
-  std::unique_ptr<AccelerationStructure> m_blas;
-  std::unique_ptr<AccelerationStructure> m_tlas;
-  std::unique_ptr<RayTracingPipeline> m_rt_pipeline;
-
-  // RT storage image (render target)
-  vk::Image m_rt_image{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_rt_image_memory{ VK_NULL_HANDLE };
-  vk::ImageView m_rt_image_view{ VK_NULL_HANDLE };
-
-  // RT descriptor set
-  vk::DescriptorPool m_rt_descriptor_pool{ VK_NULL_HANDLE };
-  vk::DescriptorSetLayout m_rt_descriptor_layout{ VK_NULL_HANDLE };
-  vk::DescriptorSet m_rt_descriptor_set{ VK_NULL_HANDLE };
 
   // Lighting
   bool m_light_enabled{ true };
@@ -311,7 +268,6 @@ private:
   bool m_use_ibl = true;            // IBL enabled by default
   int m_tonemap_mode =
     5; // 0=None, 1=Reinhard, 2=ACES Fast, 3=ACES Hill, 4=ACES+Boost, 5=Khronos PBR
-  int m_current_shader_mode = 0; // Index into shader_modes[]
 
   // Screenshot-all state machine
   int m_screenshot_all_index = -1;       // -1 = not active, >=0 = current model to screenshot
@@ -334,9 +290,6 @@ private:
   std::string m_command_file_path{ "./commands.txt" };
   std::filesystem::file_time_type m_command_file_mtime = std::filesystem::file_time_type::min();
 
-  // Current shader paths
-  std::string m_vertex_shader_path;
-  std::string m_fragment_shader_path;
 
   // Render graph (stage-based command recording)
   RenderGraph m_render_graph;

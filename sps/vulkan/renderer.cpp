@@ -55,7 +55,8 @@ VulkanRenderer::VulkanRenderer(const RendererConfig& config)
     throw std::runtime_error("Invalid GPU index");
   }
 
-  const vk::PhysicalDeviceFeatures required_features{};
+  vk::PhysicalDeviceFeatures required_features{};
+  required_features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
   const vk::PhysicalDeviceFeatures optional_features{};
 
   std::vector<const char*> required_extensions{

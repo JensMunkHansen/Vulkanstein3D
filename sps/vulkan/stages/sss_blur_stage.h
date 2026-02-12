@@ -5,50 +5,67 @@
 namespace sps::vulkan
 {
 
+class RenderGraph;
+class VulkanRenderer;
+
 /// Screen-space subsurface scattering blur stage.
+///
+/// Self-contained stage: owns its compute pipeline, descriptors, and ping image.
 /// Runs as an Intermediate stage between the scene and composite passes.
 /// Applies a separable (horizontal + vertical) blur to SSS pixels only
-/// (identified by stencil == 1), with per-channel blur widths.
+/// (identified by alpha == 1 in the HDR buffer), with per-channel blur widths.
+///
+/// Queries the SharedImageRegistry (via RenderGraph) for "hdr" and "depth_stencil"
+/// entries. Refreshes cached handles on swapchain resize.
 class SSSBlurStage : public RenderStage
 {
 public:
-  SSSBlurStage(const bool* enabled,
-    const float* blur_width_r, const float* blur_width_g, const float* blur_width_b,
-    vk::Pipeline pipeline, vk::PipelineLayout layout,
-    vk::DescriptorSet h_descriptor, vk::DescriptorSet v_descriptor,
-    vk::Image* hdr_image, vk::Image depth_stencil_image, vk::Extent2D* extent)
-    : RenderStage("SSSBlurStage"), m_enabled(enabled),
-      m_blur_width_r(blur_width_r), m_blur_width_g(blur_width_g), m_blur_width_b(blur_width_b),
-      m_pipeline(pipeline), m_layout(layout),
-      m_h_descriptor(h_descriptor), m_v_descriptor(v_descriptor),
-      m_hdr_image(hdr_image), m_depth_stencil_image(depth_stencil_image), m_extent(extent)
-  {
-  }
+  SSSBlurStage(const VulkanRenderer& renderer, RenderGraph& graph,
+    const bool* enabled,
+    const float* blur_width_r, const float* blur_width_g, const float* blur_width_b);
+  ~SSSBlurStage() override;
+
+  SSSBlurStage(const SSSBlurStage&) = delete;
+  SSSBlurStage& operator=(const SSSBlurStage&) = delete;
 
   void record(const FrameContext& ctx) override;
   [[nodiscard]] bool is_enabled() const override { return *m_enabled; }
   [[nodiscard]] Phase phase() const override { return Phase::Intermediate; }
-
-  void set_descriptors(vk::DescriptorSet h, vk::DescriptorSet v)
-  {
-    m_h_descriptor = h;
-    m_v_descriptor = v;
-  }
-
-  void set_depth_stencil_image(vk::Image img) { m_depth_stencil_image = img; }
+  void on_swapchain_resize(const Device& device, vk::Extent2D extent) override;
 
 private:
+  const VulkanRenderer& m_renderer;
+  RenderGraph& m_graph;
   const bool* m_enabled;
   const float* m_blur_width_r;
   const float* m_blur_width_g;
   const float* m_blur_width_b;
-  vk::Pipeline m_pipeline;
-  vk::PipelineLayout m_layout;
-  vk::DescriptorSet m_h_descriptor;  // HDR->ping (horizontal)
-  vk::DescriptorSet m_v_descriptor;  // ping->HDR (vertical)
-  vk::Image* m_hdr_image;
+
+  // Owned resources
+  vk::DescriptorSetLayout m_descriptor_layout{ VK_NULL_HANDLE };
+  vk::DescriptorPool m_descriptor_pool{ VK_NULL_HANDLE };
+  vk::DescriptorSet m_h_descriptor{ VK_NULL_HANDLE };  // HDR->ping (horizontal)
+  vk::DescriptorSet m_v_descriptor{ VK_NULL_HANDLE };  // ping->HDR (vertical)
+  vk::PipelineLayout m_pipeline_layout{ VK_NULL_HANDLE };
+  vk::Pipeline m_pipeline{ VK_NULL_HANDLE };
+  vk::Sampler m_stencil_sampler{ VK_NULL_HANDLE };
+
+  // Ping image (intermediate for separable blur)
+  vk::Image m_ping_image{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_ping_image_memory{ VK_NULL_HANDLE };
+  vk::ImageView m_ping_image_view{ VK_NULL_HANDLE };
+
+  // Cached from registry (refreshed on resize)
+  vk::Image m_hdr_image;
   vk::Image m_depth_stencil_image;
-  vk::Extent2D* m_extent;
+  vk::Extent2D m_extent{};
+
+  void create_pipeline();
+  void create_ping_image();
+  void destroy_ping_image();
+  void create_descriptors();
+  void destroy_descriptors();
+  void update_from_registry();
 };
 
 } // namespace sps::vulkan

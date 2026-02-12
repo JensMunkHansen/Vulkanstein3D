@@ -1,4 +1,5 @@
 #include <sps/vulkan/stages/raster_blend_stage.h>
+#include <sps/vulkan/stages/raster_opaque_stage.h>
 #include <sps/vulkan/camera.h>
 #include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/gltf_loader.h>
@@ -58,8 +59,10 @@ void RasterBlendStage::record(const FrameContext& ctx)
     float attenuationDistance;
   } pc{};
 
+  auto layout = m_opaque.pipeline_layout();
+
   // Mesh is already bound by RasterOpaqueStage
-  ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+  ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_opaque.blend_pipeline());
 
   for (const auto* prim : blend_prims)
   {
@@ -88,10 +91,10 @@ void RasterBlendStage::record(const FrameContext& ctx)
       (uint32_t(glm::clamp(mat.attenuationColor.b, 0.0f, 1.0f) * 255.0f) << 16);
     pc.attenuationDistance = mat.attenuationDistance;
 
-    ctx.command_buffer.pushConstants(ctx.pipeline_layout,
+    ctx.command_buffer.pushConstants(layout,
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
       static_cast<uint32_t>(sizeof(pc)), &pc);
-    ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, ctx.pipeline_layout,
+    ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout,
       0, (*ctx.material_descriptors)[prim->materialIndex]->descriptor_set(), {});
     ctx.command_buffer.drawIndexed(prim->indexCount, 1, prim->firstIndex, prim->vertexOffset, 0);
   }

@@ -478,8 +478,13 @@ Device::Device(const Instance& inst, vk::SurfaceKHR surface, bool prefer_distinc
   extendedDynamicStateFeatures.extendedDynamicState = VK_TRUE;
 
   // Create device with extended features for ray tracing
+  vk::PhysicalDeviceDescriptorIndexingFeatures descriptorIndexingFeatures{};
+  descriptorIndexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+  descriptorIndexingFeatures.runtimeDescriptorArray = VK_TRUE;
+
   vk::PhysicalDeviceBufferDeviceAddressFeatures bufferDeviceAddressFeatures{};
   bufferDeviceAddressFeatures.bufferDeviceAddress = VK_TRUE;
+  bufferDeviceAddressFeatures.pNext = &descriptorIndexingFeatures;
 
   vk::PhysicalDeviceAccelerationStructureFeaturesKHR asFeatures{};
   asFeatures.accelerationStructure = VK_TRUE;

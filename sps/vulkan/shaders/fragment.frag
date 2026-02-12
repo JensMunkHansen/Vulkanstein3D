@@ -270,9 +270,12 @@ void main()
     float distance = length(lightVec);
     L = lightVec / distance;
 
-    // Inverse square falloff (physically correct)
-    // Add small constant to prevent division by zero at very close range
-    attenuation = 1.0 / (distance * distance + 0.0001);
+    // Inverse square falloff with unit-distance normalization:
+    // attenuation = 1.0 at distance 0, 0.5 at distance 1, falls off smoothly.
+    // The +1.0 prevents the singularity at distance 0 and keeps the light
+    // useful at scene-scale distances (unlike raw 1/d² which requires the
+    // light to be on the surface to have any visible effect).
+    attenuation = 1.0 / (1.0 + distance * distance);
   }
 
   // Halfway vector

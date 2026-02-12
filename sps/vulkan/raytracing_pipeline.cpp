@@ -38,7 +38,8 @@ vk::ShaderModule RayTracingPipeline::create_shader_module(const std::string& pat
 }
 
 void RayTracingPipeline::create(const std::string& raygen_path, const std::string& miss_path,
-  const std::string& closesthit_path, vk::DescriptorSetLayout descriptor_set_layout)
+  const std::string& closesthit_path, vk::DescriptorSetLayout descriptor_set_layout,
+  uint32_t vertex_stride_floats)
 {
   auto dev = m_device->device();
 
@@ -46,6 +47,18 @@ void RayTracingPipeline::create(const std::string& raygen_path, const std::strin
   vk::ShaderModule raygenModule = create_shader_module(raygen_path);
   vk::ShaderModule missModule = create_shader_module(miss_path);
   vk::ShaderModule chitModule = create_shader_module(closesthit_path);
+
+  // Specialization constant for closesthit: vertex stride in floats
+  vk::SpecializationMapEntry specEntry{};
+  specEntry.constantID = 0;
+  specEntry.offset = 0;
+  specEntry.size = sizeof(uint32_t);
+
+  vk::SpecializationInfo specInfo{};
+  specInfo.mapEntryCount = 1;
+  specInfo.pMapEntries = &specEntry;
+  specInfo.dataSize = sizeof(uint32_t);
+  specInfo.pData = &vertex_stride_floats;
 
   // Shader stages
   std::vector<vk::PipelineShaderStageCreateInfo> stages(3);
@@ -61,6 +74,7 @@ void RayTracingPipeline::create(const std::string& raygen_path, const std::strin
   stages[2].stage = vk::ShaderStageFlagBits::eClosestHitKHR;
   stages[2].module = chitModule;
   stages[2].pName = "main";
+  stages[2].pSpecializationInfo = &specInfo;
 
   // Shader groups
   std::vector<vk::RayTracingShaderGroupCreateInfoKHR> groups(3);

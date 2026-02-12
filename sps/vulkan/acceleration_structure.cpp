@@ -1,6 +1,7 @@
 #include <sps/vulkan/acceleration_structure.h>
 #include <sps/vulkan/device.h>
 #include <sps/vulkan/mesh.h>
+#include <sps/vulkan/vertex.h>
 
 #include <spdlog/spdlog.h>
 
@@ -158,7 +159,7 @@ void AccelerationStructure::build_blas(vk::CommandBuffer cmd, const Mesh& mesh)
   vk::AccelerationStructureGeometryTrianglesDataKHR triangles{};
   triangles.vertexFormat = vk::Format::eR32G32B32Sfloat;
   triangles.vertexData.deviceAddress = get_buffer_device_address(dev, mesh.vertex_buffer());
-  triangles.vertexStride = sizeof(float) * 9; // position(3) + normal(3) + color(3)
+  triangles.vertexStride = sizeof(Vertex);
   triangles.maxVertex = mesh.vertex_count() - 1;
 
   // Handle indexed vs non-indexed meshes

@@ -25,8 +25,10 @@ public:
   /// @param miss_path Path to miss shader SPIR-V
   /// @param closesthit_path Path to closest hit shader SPIR-V
   /// @param descriptor_set_layout Descriptor set layout for the pipeline
+  /// @param vertex_stride_floats Number of floats per vertex (for closesthit specialization constant)
   void create(const std::string& raygen_path, const std::string& miss_path,
-    const std::string& closesthit_path, vk::DescriptorSetLayout descriptor_set_layout);
+    const std::string& closesthit_path, vk::DescriptorSetLayout descriptor_set_layout,
+    uint32_t vertex_stride_floats);
 
   /// Trace rays
   /// @param cmd Command buffer

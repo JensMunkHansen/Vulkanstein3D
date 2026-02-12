@@ -35,8 +35,6 @@ int main(int argc, char* argv[])
 
   Application app(argc, argv);
 
-  // Force rasterization mode (no ray tracing for now)
-  app.use_raytracing() = false;
 
   // Setup ImGui context
   IMGUI_CHECKVERSION();
@@ -119,6 +117,10 @@ int main(int argc, char* argv[])
       }
       ImGui::SameLine();
       ImGui::TextDisabled("(off = Immediate)");
+
+      ImGui::Checkbox("Ray Tracing", &app.use_raytracing());
+      ImGui::SameLine();
+      ImGui::TextDisabled("(R key)");
 
       ImGui::ColorEdit3("Background", &app.clear_color().x);
     }
@@ -250,8 +252,20 @@ int main(int argc, char* argv[])
 
         if (auto* point_light = dynamic_cast<PointLight*>(&light))
         {
+          const auto& bounds = app.scene_bounds();
+          glm::vec3 center = bounds.valid()
+            ? (bounds.min + bounds.max) * 0.5f
+            : glm::vec3(0.0f);
+          glm::vec3 extent = bounds.valid()
+            ? bounds.max - bounds.min
+            : glm::vec3(10.0f);
+          glm::vec3 rangeMin = center - extent;
+          glm::vec3 rangeMax = center + extent;
+          float speed = glm::length(extent) * 0.01f;
           glm::vec3 pos = point_light->position();
-          if (ImGui::DragFloat3("Position", &pos.x, 0.1f, -10.0f, 10.0f))
+          if (ImGui::DragFloat3("Position", &pos.x, speed,
+                glm::min(rangeMin.x, glm::min(rangeMin.y, rangeMin.z)),
+                glm::max(rangeMax.x, glm::max(rangeMax.y, rangeMax.z))))
           {
             point_light->set_position(pos);
           }
@@ -302,16 +316,16 @@ int main(int argc, char* argv[])
       }
     }
 
-    if (ImGui::CollapsingHeader("Shaders"))
+    if (!app.use_raytracing() && ImGui::CollapsingHeader("Shaders"))
     {
       if (ImGui::Combo("Shader", &current_shader, shader_names, SHADER_3D_COUNT, SHADER_3D_COUNT))
       {
-        app.reload_shaders(vertex_shaders[current_shader], fragment_shaders[current_shader]);
+        app.apply_shader_mode(current_shader);
       }
 
       if (ImGui::Button("Reload Shaders"))
       {
-        app.reload_shaders(vertex_shaders[current_shader], fragment_shaders[current_shader]);
+        app.apply_shader_mode(current_shader);
       }
       ImGui::SameLine();
       ImGui::TextDisabled("(after editing .frag/.vert)");
@@ -326,7 +340,7 @@ int main(int argc, char* argv[])
       ImGui::TextDisabled("(saves to current directory)");
     }
 
-    if (ImGui::CollapsingHeader("2D Debug"))
+    if (!app.use_raytracing() && ImGui::CollapsingHeader("2D Debug"))
     {
       ImGui::Checkbox("2D Texture View", &app.debug_2d_mode());
       ImGui::SetItemTooltip("Display texture flat on screen (skips 3D rendering)");

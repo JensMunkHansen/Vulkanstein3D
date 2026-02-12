@@ -150,8 +150,8 @@ Application::Application(int argc, char** argv)
 
   m_scene_manager->create_descriptors(m_uniform_buffer->buffer());
 
-  // Make pipeline (needs descriptor layout and vertex format)
-  make_pipeline();
+  // Create scene render pass (pipelines created by RasterOpaqueStage in finalize_setup)
+  create_scene_renderpass();
 
   // Reset camera to frame loaded scene
   if (load_result.success && load_result.bounds.valid())
@@ -214,481 +214,6 @@ void Application::create_uniform_buffer()
   m_uniform_buffer =
     std::make_unique<UniformBuffer<UniformBufferObject>>(m_renderer->device(), "camera uniform buffer");
   spdlog::trace("Created uniform buffer");
-}
-
-void Application::create_blur_resources()
-{
-  auto dev = m_renderer->device().device();
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-  m_blur_extent = extent;
-
-  // Create ping image (intermediate for separable blur)
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.format = m_renderer->hdr_format();
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-  imageInfo.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
-  imageInfo.samples = vk::SampleCountFlagBits::e1;
-  imageInfo.sharingMode = vk::SharingMode::eExclusive;
-
-  m_blurPingImage = dev.createImage(imageInfo);
-
-  vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_blurPingImage);
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = m_renderer->device().find_memory_type(
-    memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_blurPingImageMemory = dev.allocateMemory(allocInfo);
-  dev.bindImageMemory(m_blurPingImage, m_blurPingImageMemory, 0);
-
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_blurPingImage;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_renderer->hdr_format();
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_blurPingImageView = dev.createImageView(viewInfo);
-
-  // Transition ping image to General layout using a one-shot command buffer
-  {
-    vk::CommandBufferAllocateInfo allocCmdInfo{};
-    allocCmdInfo.commandPool = m_renderer->command_pool();
-    allocCmdInfo.level = vk::CommandBufferLevel::ePrimary;
-    allocCmdInfo.commandBufferCount = 1;
-    auto cmd = dev.allocateCommandBuffers(allocCmdInfo)[0];
-    cmd.begin(vk::CommandBufferBeginInfo{ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
-
-    vk::ImageMemoryBarrier barrier{};
-    barrier.oldLayout = vk::ImageLayout::eUndefined;
-    barrier.newLayout = vk::ImageLayout::eGeneral;
-    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    barrier.image = m_blurPingImage;
-    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-    barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
-    barrier.subresourceRange.baseArrayLayer = 0;
-    barrier.subresourceRange.layerCount = 1;
-    barrier.srcAccessMask = {};
-    barrier.dstAccessMask = vk::AccessFlagBits::eShaderWrite;
-    cmd.pipelineBarrier(
-      vk::PipelineStageFlagBits::eTopOfPipe,
-      vk::PipelineStageFlagBits::eComputeShader,
-      {}, {}, {}, barrier);
-
-    cmd.end();
-    vk::SubmitInfo submitInfo{};
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
-    m_renderer->device().graphics_queue().submit(submitInfo);
-    m_renderer->device().graphics_queue().waitIdle();
-    dev.freeCommandBuffers(m_renderer->command_pool(), cmd);
-  }
-
-  // Create descriptor set layout (2 storage images + 1 combined image sampler for stencil)
-  if (!m_sss_blur_descriptor_layout)
-  {
-    std::array<vk::DescriptorSetLayoutBinding, 3> bindings{};
-    bindings[0].binding = 0;
-    bindings[0].descriptorType = vk::DescriptorType::eStorageImage;
-    bindings[0].descriptorCount = 1;
-    bindings[0].stageFlags = vk::ShaderStageFlagBits::eCompute;
-    bindings[1].binding = 1;
-    bindings[1].descriptorType = vk::DescriptorType::eStorageImage;
-    bindings[1].descriptorCount = 1;
-    bindings[1].stageFlags = vk::ShaderStageFlagBits::eCompute;
-    bindings[2].binding = 2;
-    bindings[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    bindings[2].descriptorCount = 1;
-    bindings[2].stageFlags = vk::ShaderStageFlagBits::eCompute;
-
-    vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
-    m_sss_blur_descriptor_layout = dev.createDescriptorSetLayout(layoutInfo);
-  }
-
-  // Create stencil sampler (nearest, clamp-to-edge)
-  if (!m_sss_stencil_sampler)
-  {
-    vk::SamplerCreateInfo samplerInfo{};
-    samplerInfo.magFilter = vk::Filter::eNearest;
-    samplerInfo.minFilter = vk::Filter::eNearest;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    m_sss_stencil_sampler = dev.createSampler(samplerInfo);
-  }
-
-  // Create descriptor pool (2 sets, 4 storage images + 2 combined image samplers)
-  if (!m_sss_blur_descriptor_pool)
-  {
-    std::array<vk::DescriptorPoolSize, 2> poolSizes{};
-    poolSizes[0].type = vk::DescriptorType::eStorageImage;
-    poolSizes[0].descriptorCount = 4;
-    poolSizes[1].type = vk::DescriptorType::eCombinedImageSampler;
-    poolSizes[1].descriptorCount = 2;
-
-    vk::DescriptorPoolCreateInfo poolInfo{};
-    poolInfo.maxSets = 2;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    m_sss_blur_descriptor_pool = dev.createDescriptorPool(poolInfo);
-  }
-  else
-  {
-    dev.resetDescriptorPool(m_sss_blur_descriptor_pool);
-  }
-
-  // Allocate 2 descriptor sets
-  std::array<vk::DescriptorSetLayout, 2> layouts = { m_sss_blur_descriptor_layout, m_sss_blur_descriptor_layout };
-  vk::DescriptorSetAllocateInfo dsAllocInfo{};
-  dsAllocInfo.descriptorPool = m_sss_blur_descriptor_pool;
-  dsAllocInfo.descriptorSetCount = 2;
-  dsAllocInfo.pSetLayouts = layouts.data();
-  auto sets = dev.allocateDescriptorSets(dsAllocInfo);
-  m_sss_blur_h_descriptor = sets[0]; // H pass: read HDR, write ping
-  m_sss_blur_v_descriptor = sets[1]; // V pass: read ping, write HDR
-
-  // Update H descriptor: binding 0 = HDR (read), binding 1 = ping (write), binding 2 = stencil
-  vk::DescriptorImageInfo hdrInfo{};
-  hdrInfo.imageView = m_renderer->hdr_image_view();
-  hdrInfo.imageLayout = vk::ImageLayout::eGeneral;
-
-  vk::DescriptorImageInfo pingInfo{};
-  pingInfo.imageView = m_blurPingImageView;
-  pingInfo.imageLayout = vk::ImageLayout::eGeneral;
-
-  vk::DescriptorImageInfo stencilInfo{};
-  stencilInfo.sampler = m_sss_stencil_sampler;
-  stencilInfo.imageView = m_renderer->depth_stencil().stencil_view();
-  stencilInfo.imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-
-  std::array<vk::WriteDescriptorSet, 6> writes{};
-  writes[0].dstSet = m_sss_blur_h_descriptor;
-  writes[0].dstBinding = 0;
-  writes[0].descriptorCount = 1;
-  writes[0].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[0].pImageInfo = &hdrInfo;
-
-  writes[1].dstSet = m_sss_blur_h_descriptor;
-  writes[1].dstBinding = 1;
-  writes[1].descriptorCount = 1;
-  writes[1].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[1].pImageInfo = &pingInfo;
-
-  writes[2].dstSet = m_sss_blur_h_descriptor;
-  writes[2].dstBinding = 2;
-  writes[2].descriptorCount = 1;
-  writes[2].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-  writes[2].pImageInfo = &stencilInfo;
-
-  writes[3].dstSet = m_sss_blur_v_descriptor;
-  writes[3].dstBinding = 0;
-  writes[3].descriptorCount = 1;
-  writes[3].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[3].pImageInfo = &pingInfo;
-
-  writes[4].dstSet = m_sss_blur_v_descriptor;
-  writes[4].dstBinding = 1;
-  writes[4].descriptorCount = 1;
-  writes[4].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[4].pImageInfo = &hdrInfo;
-
-  writes[5].dstSet = m_sss_blur_v_descriptor;
-  writes[5].dstBinding = 2;
-  writes[5].descriptorCount = 1;
-  writes[5].descriptorType = vk::DescriptorType::eCombinedImageSampler;
-  writes[5].pImageInfo = &stencilInfo;
-
-  dev.updateDescriptorSets(writes, {});
-
-  // Create pipeline layout
-  if (!m_sss_blur_pipelineLayout)
-  {
-    vk::PushConstantRange pcRange{};
-    pcRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
-    pcRange.offset = 0;
-    pcRange.size = 16; // 3x float blurWidth (R,G,B) + int direction
-
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &m_sss_blur_descriptor_layout;
-    pipelineLayoutInfo.pushConstantRangeCount = 1;
-    pipelineLayoutInfo.pPushConstantRanges = &pcRange;
-    m_sss_blur_pipelineLayout = dev.createPipelineLayout(pipelineLayoutInfo);
-  }
-
-  // Create compute pipeline
-  if (!m_sss_blur_pipeline)
-  {
-    auto shaderModule = sps::vulkan::createModule(SHADER_DIR "sss_blur.spv", dev, true);
-
-    vk::PipelineShaderStageCreateInfo stageInfo{};
-    stageInfo.stage = vk::ShaderStageFlagBits::eCompute;
-    stageInfo.module = shaderModule;
-    stageInfo.pName = "main";
-
-    vk::ComputePipelineCreateInfo pipelineInfo{};
-    pipelineInfo.stage = stageInfo;
-    pipelineInfo.layout = m_sss_blur_pipelineLayout;
-
-    m_sss_blur_pipeline = dev.createComputePipeline(nullptr, pipelineInfo).value;
-
-    dev.destroyShaderModule(shaderModule);
-  }
-
-  spdlog::info("Created SSS blur resources {}x{}", extent.width, extent.height);
-}
-
-void Application::destroy_blur_resources()
-{
-  auto dev = m_renderer->device().device();
-
-  if (m_blurPingImageView)
-  {
-    dev.destroyImageView(m_blurPingImageView);
-    m_blurPingImageView = VK_NULL_HANDLE;
-  }
-  if (m_blurPingImage)
-  {
-    dev.destroyImage(m_blurPingImage);
-    m_blurPingImage = VK_NULL_HANDLE;
-  }
-  if (m_blurPingImageMemory)
-  {
-    dev.freeMemory(m_blurPingImageMemory);
-    m_blurPingImageMemory = VK_NULL_HANDLE;
-  }
-}
-
-void Application::create_rt_storage_image()
-{
-  auto dev = m_renderer->device().device();
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-
-  // Create storage image for RT output
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.format = vk::Format::eR8G8B8A8Unorm;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.samples = vk::SampleCountFlagBits::e1;
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-
-  m_rt_image = dev.createImage(imageInfo);
-
-  vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_rt_image);
-
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex =
-    m_renderer->device().find_memory_type(memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_rt_image_memory = dev.allocateMemory(allocInfo);
-  dev.bindImageMemory(m_rt_image, m_rt_image_memory, 0);
-
-  // Create image view
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_rt_image;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = vk::Format::eR8G8B8A8Unorm;
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_rt_image_view = dev.createImageView(viewInfo);
-
-  spdlog::trace("Created RT storage image {}x{}", extent.width, extent.height);
-}
-
-void Application::create_rt_descriptor()
-{
-  auto dev = m_renderer->device().device();
-
-  // Create descriptor pool
-  std::vector<vk::DescriptorPoolSize> poolSizes = {
-    { vk::DescriptorType::eAccelerationStructureKHR, 1 }, { vk::DescriptorType::eStorageImage, 1 },
-    { vk::DescriptorType::eUniformBuffer, 1 },
-    { vk::DescriptorType::eStorageBuffer, 2 } // vertex + index buffers
-  };
-
-  vk::DescriptorPoolCreateInfo poolInfo{};
-  poolInfo.maxSets = 1;
-  poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-  poolInfo.pPoolSizes = poolSizes.data();
-
-  m_rt_descriptor_pool = dev.createDescriptorPool(poolInfo);
-
-  // Create descriptor set layout
-  std::vector<vk::DescriptorSetLayoutBinding> bindings = { // Binding 0: TLAS
-    { 0, vk::DescriptorType::eAccelerationStructureKHR, 1,
-      vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR },
-    // Binding 1: Storage image
-    { 1, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eRaygenKHR },
-    // Binding 2: Uniform buffer
-    { 2, vk::DescriptorType::eUniformBuffer, 1,
-      vk::ShaderStageFlagBits::eRaygenKHR | vk::ShaderStageFlagBits::eClosestHitKHR },
-    // Binding 3: Vertex buffer (for vertex colors/normals in closesthit)
-    { 3, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR },
-    // Binding 4: Index buffer (for triangle lookup in closesthit)
-    { 4, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eClosestHitKHR }
-  };
-
-  vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-  layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-  layoutInfo.pBindings = bindings.data();
-
-  m_rt_descriptor_layout = dev.createDescriptorSetLayout(layoutInfo);
-
-  // Allocate descriptor set
-  vk::DescriptorSetAllocateInfo allocInfo{};
-  allocInfo.descriptorPool = m_rt_descriptor_pool;
-  allocInfo.descriptorSetCount = 1;
-  allocInfo.pSetLayouts = &m_rt_descriptor_layout;
-
-  auto sets = dev.allocateDescriptorSets(allocInfo);
-  m_rt_descriptor_set = sets[0];
-
-  // Update descriptor set
-  vk::WriteDescriptorSetAccelerationStructureKHR asWrite{};
-  asWrite.accelerationStructureCount = 1;
-  vk::AccelerationStructureKHR tlas = m_tlas->handle();
-  asWrite.pAccelerationStructures = &tlas;
-
-  vk::DescriptorImageInfo imageInfo{};
-  imageInfo.imageView = m_rt_image_view;
-  imageInfo.imageLayout = vk::ImageLayout::eGeneral;
-
-  vk::DescriptorBufferInfo bufferInfo{};
-  bufferInfo.buffer = m_uniform_buffer->buffer();
-  bufferInfo.offset = 0;
-  bufferInfo.range = sizeof(UniformBufferObject);
-
-  vk::DescriptorBufferInfo vertexBufferInfo{};
-  vertexBufferInfo.buffer = m_scene_manager->mesh()->vertex_buffer();
-  vertexBufferInfo.offset = 0;
-  vertexBufferInfo.range = VK_WHOLE_SIZE;
-
-  vk::DescriptorBufferInfo indexBufferInfo{};
-  indexBufferInfo.buffer = m_scene_manager->mesh()->index_buffer();
-  indexBufferInfo.offset = 0;
-  indexBufferInfo.range = VK_WHOLE_SIZE;
-
-  std::vector<vk::WriteDescriptorSet> writes(5);
-
-  // TLAS
-  writes[0].dstSet = m_rt_descriptor_set;
-  writes[0].dstBinding = 0;
-  writes[0].descriptorCount = 1;
-  writes[0].descriptorType = vk::DescriptorType::eAccelerationStructureKHR;
-  writes[0].pNext = &asWrite;
-
-  // Storage image
-  writes[1].dstSet = m_rt_descriptor_set;
-  writes[1].dstBinding = 1;
-  writes[1].descriptorCount = 1;
-  writes[1].descriptorType = vk::DescriptorType::eStorageImage;
-  writes[1].pImageInfo = &imageInfo;
-
-  // Uniform buffer
-  writes[2].dstSet = m_rt_descriptor_set;
-  writes[2].dstBinding = 2;
-  writes[2].descriptorCount = 1;
-  writes[2].descriptorType = vk::DescriptorType::eUniformBuffer;
-  writes[2].pBufferInfo = &bufferInfo;
-
-  // Vertex buffer
-  writes[3].dstSet = m_rt_descriptor_set;
-  writes[3].dstBinding = 3;
-  writes[3].descriptorCount = 1;
-  writes[3].descriptorType = vk::DescriptorType::eStorageBuffer;
-  writes[3].pBufferInfo = &vertexBufferInfo;
-
-  // Index buffer
-  writes[4].dstSet = m_rt_descriptor_set;
-  writes[4].dstBinding = 4;
-  writes[4].descriptorCount = 1;
-  writes[4].descriptorType = vk::DescriptorType::eStorageBuffer;
-  writes[4].pBufferInfo = &indexBufferInfo;
-
-  dev.updateDescriptorSets(writes, {});
-
-  spdlog::trace("Created RT descriptor set");
-}
-
-void Application::create_rt_pipeline()
-{
-  m_rt_pipeline = std::make_unique<RayTracingPipeline>(m_renderer->device());
-  m_rt_pipeline->create(
-    SHADER_DIR "raygen.spv",
-    SHADER_DIR "miss.spv",
-    SHADER_DIR "closesthit.spv",
-    m_rt_descriptor_layout);
-}
-
-void Application::build_acceleration_structures()
-{
-  if (!m_renderer->device().supports_ray_tracing() || !m_scene_manager->mesh())
-  {
-    spdlog::warn("Cannot build acceleration structures: RT not supported or no mesh");
-    return;
-  }
-
-  // Create command buffer for AS building
-  vk::CommandBufferAllocateInfo allocInfo{};
-  allocInfo.commandPool = m_renderer->command_pool();
-  allocInfo.level = vk::CommandBufferLevel::ePrimary;
-  allocInfo.commandBufferCount = 1;
-
-  auto cmdBuffers = m_renderer->device().device().allocateCommandBuffers(allocInfo);
-  vk::CommandBuffer cmd = cmdBuffers[0];
-
-  vk::CommandBufferBeginInfo beginInfo{};
-  beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
-  cmd.begin(beginInfo);
-
-  // Build BLAS
-  m_blas = std::make_unique<AccelerationStructure>(m_renderer->device(), "mesh BLAS");
-  m_blas->build_blas(cmd, *m_scene_manager->mesh());
-
-  // Build TLAS
-  m_tlas = std::make_unique<AccelerationStructure>(m_renderer->device(), "scene TLAS");
-  std::vector<std::pair<const AccelerationStructure*, glm::mat4>> instances;
-  instances.push_back({ m_blas.get(), glm::mat4(1.0f) });
-  m_tlas->build_tlas(cmd, instances);
-
-  cmd.end();
-
-  // Submit and wait
-  vk::SubmitInfo submitInfo{};
-  submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &cmd;
-
-  m_renderer->device().graphics_queue().submit(submitInfo, nullptr);
-  m_renderer->device().wait_idle();
-
-  m_renderer->device().device().freeCommandBuffers(m_renderer->command_pool(), cmd);
-
-  spdlog::trace("Built acceleration structures");
 }
 
 void Application::update_uniform_buffer()
@@ -755,6 +280,8 @@ void Application::update_uniform_buffer()
     ubo.ibl_params = glm::vec4(m_use_ibl ? 1.0f : 0.0f, m_scene_manager->ibl_intensity(),
       static_cast<float>(m_tonemap_mode), m_use_sss ? m_sss_scale : 0.0f);
   }
+
+  ubo.clear_color = glm::vec4(m_clear_color, 0.0f);
 
   m_uniform_buffer->update(ubo);
 }
@@ -954,16 +481,12 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.command_buffer = commandBuffer;
   ctx.image_index = imageIndex;
   ctx.extent = m_renderer->swapchain().extent();
-  ctx.scene_render_pass = m_scene_renderpass;
-  ctx.scene_framebuffer = m_scene_framebuffers[imageIndex];
-  ctx.pipeline_layout = m_pipelineLayout;
   ctx.composite_framebuffer = m_composite_stage->framebuffer(imageIndex);
   ctx.mesh = m_scene_manager->mesh();
   ctx.scene = m_scene_manager->scene();
   ctx.camera = &m_camera;
   ctx.default_descriptor = m_scene_manager->default_descriptor();
   ctx.material_descriptors = &m_scene_manager->material_descriptors();
-  ctx.swapchain = &m_renderer->swapchain();
   ctx.clear_color = m_clear_color;
 
   m_render_graph.record(ctx);
@@ -1014,17 +537,11 @@ void Application::recreate_swapchain()
   // 2. Wait for GPU to finish using old resources
   m_renderer->device().wait_idle();
 
-  // 3. Destroy framebuffers (reverse order of creation)
-  for (auto fb : m_scene_framebuffers)
-    m_renderer->device().device().destroyFramebuffer(fb);
-  m_scene_framebuffers.clear();
-
+  // 3. Scene framebuffers destroyed by RenderGraph::recreate_scene_framebuffers()
   // Composite framebuffers destroyed by CompositeStage::on_swapchain_resize()
+  // SSS blur ping image + descriptors destroyed by SSSBlurStage::on_swapchain_resize()
 
-  // 4. Destroy old blur resources (depends on HDR image views)
-  destroy_blur_resources();
-
-  // 5. Recreate swapchain (handles its own image views internally)
+  // 4. Recreate swapchain (handles its own image views internally)
   m_renderer->swapchain().recreate(width, height);
 
   // 6. Recreate per-swapchain-image semaphores
@@ -1034,69 +551,20 @@ void Application::recreate_swapchain()
   m_renderer->recreate_depth_resources();
   m_renderer->recreate_hdr_resources();
 
-  // 8b. Recreate RT storage image if RT is enabled
-  if (m_rt_image)
-  {
-    m_renderer->device().device().destroyImageView(m_rt_image_view);
-    m_renderer->device().device().destroyImage(m_rt_image);
-    m_renderer->device().device().freeMemory(m_rt_image_memory);
-    m_rt_image_view = VK_NULL_HANDLE;
-    m_rt_image = VK_NULL_HANDLE;
-    m_rt_image_memory = VK_NULL_HANDLE;
-    create_rt_storage_image();
+  // RT storage image handled by RayTracingStage::on_swapchain_resize()
 
-    // Update RT descriptor with new image view
-    vk::DescriptorImageInfo imageInfo{};
-    imageInfo.imageView = m_rt_image_view;
-    imageInfo.imageLayout = vk::ImageLayout::eGeneral;
+  // Update shared image registry before recreating framebuffers and notifying stages
+  m_render_graph.image_registry().set("hdr",
+    { m_renderer->hdr_image(), m_renderer->hdr_image_view(), {}, m_renderer->hdr_format() });
+  m_render_graph.image_registry().set("depth_stencil",
+    { m_renderer->depth_stencil().image(), m_renderer->depth_stencil().stencil_view(),
+      {}, m_renderer->depth_format() });
 
-    vk::WriteDescriptorSet write{};
-    write.dstSet = m_rt_descriptor_set;
-    write.dstBinding = 1;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eStorageImage;
-    write.pImageInfo = &imageInfo;
-
-    m_renderer->device().device().updateDescriptorSets(write, {});
-  }
-
-  // 9. Create new scene framebuffers (HDR target)
-  {
-    vk::Extent2D extent = m_renderer->swapchain().extent();
-    m_scene_framebuffers.resize(m_renderer->swapchain().image_count());
-    for (uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
-    {
-      std::vector<vk::ImageView> attachments;
-      if (m_renderer->msaa_samples() != vk::SampleCountFlagBits::e1)
-      {
-        // MSAA: [hdrMsaa, depth, hdrResolve]
-        attachments = { m_renderer->hdr_msaa_image_view(), m_renderer->depth_stencil().combined_view(), m_renderer->hdr_image_view() };
-      }
-      else
-      {
-        // No MSAA: [hdr, depth]
-        attachments = { m_renderer->hdr_image_view(), m_renderer->depth_stencil().combined_view() };
-      }
-      vk::FramebufferCreateInfo fbInfo{};
-      fbInfo.renderPass = m_scene_renderpass;
-      fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-      fbInfo.pAttachments = attachments.data();
-      fbInfo.width = extent.width;
-      fbInfo.height = extent.height;
-      fbInfo.layers = 1;
-      m_scene_framebuffers[i] = m_renderer->device().device().createFramebuffer(fbInfo);
-    }
-  }
+  // Recreate scene framebuffers (uses registry images + scene render pass)
+  m_render_graph.recreate_scene_framebuffers();
 
   // Composite framebuffers + descriptor handled by CompositeStage::on_swapchain_resize()
-
-  // 9d. Recreate blur resources (needs HDR image + depth-stencil + command pool)
-  create_blur_resources();
-  if (m_sss_blur_stage)
-  {
-    m_sss_blur_stage->set_descriptors(m_sss_blur_h_descriptor, m_sss_blur_v_descriptor);
-    m_sss_blur_stage->set_depth_stencil_image(m_renderer->depth_stencil().image());
-  }
+  // SSS blur ping + descriptors handled by SSSBlurStage::on_swapchain_resize()
 
   // Update camera aspect ratio
   m_camera.set_aspect_ratio(static_cast<float>(width) / static_cast<float>(height));
@@ -1186,107 +654,30 @@ void Application::render()
   }
 }
 
-void Application::make_pipeline()
+void Application::create_scene_renderpass()
 {
-  make_pipeline(SHADER_DIR "vertex.spv", SHADER_DIR "fragment.spv");
-}
-
-void Application::make_pipeline(
-  const std::string& vertex_shader, const std::string& fragment_shader)
-{
-  m_vertex_shader_path = vertex_shader;
-  m_fragment_shader_path = fragment_shader;
-
-  // Create scene render pass (HDR target)
   m_scene_renderpass = sps::vulkan::make_scene_renderpass(
-    m_renderer->device().device(), m_renderer->hdr_format(), m_renderer->depth_format(), true, m_renderer->msaa_samples());
-
-  sps::vulkan::GraphicsPipelineInBundle specification = {};
-  specification.device = m_renderer->device().device();
-  specification.vertexFilepath = vertex_shader;
-  specification.fragmentFilepath = fragment_shader;
-  specification.swapchainExtent = m_renderer->swapchain().extent();
-  specification.swapchainImageFormat = m_renderer->hdr_format(); // HDR target format
-  specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
-
-  // Set vertex input format
-  auto binding = Vertex::binding_description();
-  auto attributes = Vertex::attribute_descriptions();
-  specification.vertexBindings = { binding };
-  specification.vertexAttributes = { attributes.begin(), attributes.end() };
-
-  // Rasterizer options
-  specification.backfaceCulling = m_backfaceCulling;
-  specification.dynamicCullMode = true;
-
-  // Depth testing
-  specification.depthTestEnabled = m_depthTestEnabled;
-  specification.depthFormat = m_renderer->depth_format();
-
-  // MSAA
-  specification.msaaSamples = m_renderer->msaa_samples();
-
-  // Use the scene render pass
-  specification.existingRenderPass = m_scene_renderpass;
-
-  // Push constant: 128 bytes
-  vk::PushConstantRange pcRange{
-    vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, 128
-  };
-  specification.pushConstantRanges = { pcRange };
-
-  // Pipeline 1: opaque (no blend, depth write on, stencil write for SSS masking)
-  specification.blendEnabled = false;
-  specification.depthWriteEnabled = true;
-  specification.stencilWriteEnabled = true;
-
-  sps::vulkan::GraphicsPipelineOutBundle output =
-    sps::vulkan::create_graphics_pipeline(specification, true);
-
-  m_pipelineLayout = output.layout;
-  m_pipeline = output.pipeline;
-
-  // Pipeline 2: blend (alpha blend on, depth write off, stencil disabled — preserves SSS stencil)
-  specification.blendEnabled = true;
-  specification.depthWriteEnabled = false;
-  specification.stencilWriteEnabled = false;
-  specification.existingPipelineLayout = m_pipelineLayout;
-
-  sps::vulkan::GraphicsPipelineOutBundle blendOutput =
-    sps::vulkan::create_graphics_pipeline(specification, true);
-
-  m_blend_pipeline = blendOutput.pipeline;
+    m_renderer->device().device(), m_renderer->hdr_format(), m_renderer->depth_format(),
+    true, m_renderer->msaa_samples());
 }
 
-void Application::create_debug_2d_pipeline()
+/// Create the opaque and blend raster stages as a pair.
+///
+/// These two stages share a single pipeline layout and are always created together.
+/// RasterOpaqueStage owns the pipeline layout, the opaque pipeline, and the blend
+/// pipeline. RasterBlendStage holds a const reference to the opaque stage and
+/// queries blend_pipeline() / pipeline_layout() each frame — so shader hot-reload
+/// is transparent (no stale handles).
+void Application::create_raster_stages()
 {
-  sps::vulkan::GraphicsPipelineInBundle specification = {};
-  specification.device = m_renderer->device().device();
-  specification.vertexFilepath = SHADER_DIR "fullscreen_quad.spv";
-  specification.fragmentFilepath = SHADER_DIR "debug_texture2d.spv";
-  specification.swapchainExtent = m_renderer->swapchain().extent();
-  specification.swapchainImageFormat = m_renderer->swapchain().image_format();
-  specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
-
-  // No vertex input - fullscreen quad generates vertices in shader
-  // vertexBindings and vertexAttributes left empty
-
-  // Rasterizer options
-  specification.backfaceCulling = false;
-
-  // Debug 2D renders in the composite pass (swapchain target, no depth, no MSAA)
-  specification.existingRenderPass = m_composite_renderpass;
-  specification.depthTestEnabled = false;
-  specification.msaaSamples = vk::SampleCountFlagBits::e1;
-
-  sps::vulkan::GraphicsPipelineOutBundle output =
-    sps::vulkan::create_graphics_pipeline(specification, true);
-
-  m_debug_2d_pipelineLayout = output.layout;
-  m_debug_2d_pipeline = output.pipeline;
-
-  spdlog::info("Created 2D debug pipeline");
+  m_raster_opaque_stage = m_render_graph.add<RasterOpaqueStage>(
+    *m_renderer, m_scene_renderpass, m_scene_manager->default_descriptor()->layout(),
+    std::string(SHADER_DIR "vertex.spv"), std::string(SHADER_DIR "fragment.spv"),
+    &m_use_raytracing, &m_debug_2d_mode);
+  m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
+    *m_raster_opaque_stage, &m_use_raytracing, &m_debug_2d_mode);
 }
+
 
 void Application::create_light_indicator()
 {
@@ -1348,26 +739,32 @@ void Application::create_light_indicator()
   spdlog::info("Created light indicator sphere ({} vertices)", vertices.size());
 }
 
+const std::string& Application::current_vertex_shader() const
+{
+  return m_raster_opaque_stage->current_vertex_shader();
+}
+
+const std::string& Application::current_fragment_shader() const
+{
+  return m_raster_opaque_stage->current_fragment_shader();
+}
+
+int Application::current_shader_mode() const
+{
+  return m_raster_opaque_stage->current_shader_mode();
+}
+
 void Application::reload_shaders(
   const std::string& vertex_shader, const std::string& fragment_shader)
 {
   m_renderer->device().wait_idle();
+  m_raster_opaque_stage->reload_shaders(vertex_shader, fragment_shader);
+}
 
-  // Destroy old pipelines
-  m_renderer->device().device().destroyPipeline(m_pipeline);
-  m_renderer->device().device().destroyPipeline(m_blend_pipeline);
-  m_renderer->device().device().destroyPipelineLayout(m_pipelineLayout);
-  m_renderer->device().device().destroyRenderPass(m_scene_renderpass);
-
-  make_pipeline(vertex_shader, fragment_shader);
-
-  // Update stage pipeline handles
-  if (m_raster_opaque_stage)
-    m_raster_opaque_stage->set_pipeline(m_pipeline);
-  if (m_raster_blend_stage)
-    m_raster_blend_stage->set_pipeline(m_blend_pipeline);
-
-  spdlog::info("Reloaded shaders: {} + {}", vertex_shader, fragment_shader);
+void Application::apply_shader_mode(int mode)
+{
+  m_renderer->device().wait_idle();
+  m_raster_opaque_stage->apply_shader_mode(mode);
 }
 
 bool Application::save_screenshot(const std::string& filepath)
@@ -1485,12 +882,7 @@ void Application::poll_commands()
         if (args.empty())
           return;
         int mode = std::stoi(args[0]);
-        if (mode >= 0 && mode < sps::vulkan::debug::SHADER_COUNT)
-        {
-          reload_shaders(
-            sps::vulkan::debug::vertex_shaders[mode], sps::vulkan::debug::fragment_shaders[mode]);
-          m_current_shader_mode = mode;
-        }
+        apply_shader_mode(mode);
       });
 
     // Register "screenshot" command
@@ -1612,21 +1004,25 @@ void Application::load_model(int index)
   if (!result.success)
     return;
 
-  // Camera reset
+  // Camera + light reset
   if (result.bounds.valid())
   {
     float bounds[6];
     result.bounds.to_bounds(bounds);
     m_camera.reset_camera(bounds);
+
+    // Place point light well outside the model (2x bounding sphere radius)
+    if (auto* point = dynamic_cast<PointLight*>(m_light.get()))
+    {
+      glm::vec3 center = (result.bounds.min + result.bounds.max) * 0.5f;
+      float radius = glm::length(result.bounds.max - result.bounds.min) * 0.5f;
+      point->set_position(center + glm::normalize(glm::vec3(1, 1, 0.5f)) * radius * 2.0f);
+    }
   }
 
-  // RT rebuild
-  if (m_renderer->device().supports_ray_tracing() && m_blas)
-  {
-    m_blas.reset();
-    m_tlas.reset();
-    build_acceleration_structures();
-  }
+  // RT rebuild (delegated to self-contained stage)
+  if (m_ray_tracing_stage && m_scene_manager->mesh())
+    m_ray_tracing_stage->on_mesh_changed(*m_scene_manager->mesh(), m_scene_manager->scene(), m_scene_manager->ibl());
 
   m_current_model_index = index;
 }
@@ -1644,6 +1040,10 @@ void Application::load_hdr(int index)
   m_renderer->device().wait_idle();
   m_scene_manager->load_hdr(m_hdr_files[index], m_uniform_buffer->buffer());
   m_current_hdr_index = index;
+
+  // Update RT environment cubemap
+  if (m_ray_tracing_stage && m_scene_manager->ibl())
+    m_ray_tracing_stage->update_environment(*m_scene_manager->ibl());
 }
 
 int Application::light_type() const
@@ -1698,44 +1098,6 @@ void Application::set_light_type(int type)
   m_light->set_ambient(ambient);
 }
 
-void Application::apply_shader_mode(int mode)
-{
-  // Must match main_imgui.cpp shader arrays
-  static const char* vertex_shaders[] = {
-    SHADER_DIR "vertex.spv",  // PBR
-    SHADER_DIR "vertex.spv",  // Blinn-Phong
-    SHADER_DIR "vertex.spv",  // Debug UV
-    SHADER_DIR "vertex.spv",  // Debug Normals
-    SHADER_DIR "vertex.spv",  // Debug Base Color
-    SHADER_DIR "vertex.spv",  // Debug Metallic/Roughness
-    SHADER_DIR "vertex.spv",  // Debug AO
-    SHADER_DIR "vertex.spv",  // Debug Emissive
-    SHADER_DIR "vertex.spv",  // Debug Thickness
-    SHADER_DIR "vertex.spv",  // Debug SSS
-    SHADER_DIR "vertex.spv"   // Debug Stencil
-  };
-  static const char* fragment_shaders[] = {
-    SHADER_DIR "fragment.spv",
-    SHADER_DIR "blinn_phong.spv",
-    SHADER_DIR "debug_uv.spv",
-    SHADER_DIR "debug_normals.spv",
-    SHADER_DIR "debug_basecolor.spv",
-    SHADER_DIR "debug_metallic_roughness.spv",
-    SHADER_DIR "debug_ao.spv",
-    SHADER_DIR "debug_emissive.spv",
-    SHADER_DIR "debug_thickness.spv",
-    SHADER_DIR "debug_sss.spv",
-    SHADER_DIR "debug_stencil.spv"
-  };
-
-  constexpr int num_shaders = sizeof(fragment_shaders) / sizeof(fragment_shaders[0]);
-  if (mode >= 0 && mode < num_shaders)
-  {
-    m_current_shader_mode = mode;
-    reload_shaders(vertex_shaders[mode], fragment_shaders[mode]);
-  }
-}
-
 Application::~Application()
 {
   spdlog::trace("Destroying Application");
@@ -1746,53 +1108,17 @@ Application::~Application()
   m_scene_manager.reset();
   m_uniform_buffer.reset();
 
-  // Destroy scene pipelines
-  m_renderer->device().device().destroyPipeline(m_pipeline);
-  m_renderer->device().device().destroyPipeline(m_blend_pipeline);
-  m_renderer->device().device().destroyPipelineLayout(m_pipelineLayout);
+  // Scene pipelines + layout destroyed by RasterOpaqueStage (via RenderGraph)
   m_renderer->device().device().destroyRenderPass(m_scene_renderpass);
 
-  // Destroy 2D debug pipeline
-  m_renderer->device().device().destroyPipeline(m_debug_2d_pipeline);
-  m_renderer->device().device().destroyPipelineLayout(m_debug_2d_pipelineLayout);
-
+  // Debug2D pipeline destroyed by Debug2DStage (via RenderGraph)
   // Composite pipeline, descriptors, framebuffers destroyed by CompositeStage (via RenderGraph)
+  // Scene framebuffers destroyed by RenderGraph destructor
   m_renderer->device().device().destroyRenderPass(m_composite_renderpass);
 
-  // Destroy framebuffers
-  for (auto fb : m_scene_framebuffers)
-    m_renderer->device().device().destroyFramebuffer(fb);
-
   // Depth-stencil, HDR, MSAA destroyed by renderer
-
-  // Destroy SSS blur resources
-  destroy_blur_resources();
-  if (m_sss_blur_pipeline)
-    m_renderer->device().device().destroyPipeline(m_sss_blur_pipeline);
-  if (m_sss_blur_pipelineLayout)
-    m_renderer->device().device().destroyPipelineLayout(m_sss_blur_pipelineLayout);
-  if (m_sss_blur_descriptor_pool)
-    m_renderer->device().device().destroyDescriptorPool(m_sss_blur_descriptor_pool);
-  if (m_sss_blur_descriptor_layout)
-    m_renderer->device().device().destroyDescriptorSetLayout(m_sss_blur_descriptor_layout);
-  if (m_sss_stencil_sampler)
-    m_renderer->device().device().destroySampler(m_sss_stencil_sampler);
-
-  // Destroy RT resources
-  m_rt_pipeline.reset();
-  m_tlas.reset();
-  m_blas.reset();
-
-  if (m_rt_image_view)
-    m_renderer->device().device().destroyImageView(m_rt_image_view);
-  if (m_rt_image)
-    m_renderer->device().device().destroyImage(m_rt_image);
-  if (m_rt_image_memory)
-    m_renderer->device().device().freeMemory(m_rt_image_memory);
-  if (m_rt_descriptor_pool)
-    m_renderer->device().device().destroyDescriptorPool(m_rt_descriptor_pool);
-  if (m_rt_descriptor_layout)
-    m_renderer->device().device().destroyDescriptorSetLayout(m_rt_descriptor_layout);
+  // SSS blur resources destroyed by SSSBlurStage (via RenderGraph)
+  // RT resources destroyed by RayTracingStage (via RenderGraph)
 
   // Swapchain destroyed in renderer
   // Surface ..
@@ -1802,73 +1128,38 @@ Application::~Application()
 
 void Application::finalize_setup()
 {
-  // Create scene framebuffers (HDR target)
-  {
-    vk::Extent2D extent = m_renderer->swapchain().extent();
-    m_scene_framebuffers.resize(m_renderer->swapchain().image_count());
-    for (uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
-    {
-      std::vector<vk::ImageView> attachments;
-      if (m_renderer->msaa_samples() != vk::SampleCountFlagBits::e1)
-      {
-        attachments = { m_renderer->hdr_msaa_image_view(), m_renderer->depth_stencil().combined_view(), m_renderer->hdr_image_view() };
-      }
-      else
-      {
-        attachments = { m_renderer->hdr_image_view(), m_renderer->depth_stencil().combined_view() };
-      }
-      vk::FramebufferCreateInfo fbInfo{};
-      fbInfo.renderPass = m_scene_renderpass;
-      fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-      fbInfo.pAttachments = attachments.data();
-      fbInfo.width = extent.width;
-      fbInfo.height = extent.height;
-      fbInfo.layers = 1;
-      m_scene_framebuffers[i] = m_renderer->device().device().createFramebuffer(fbInfo);
-    }
-  }
-
-  // Create composite render pass and register with graph
+  // Register render passes with graph
+  m_render_graph.set_render_pass(Phase::ScenePass, m_scene_renderpass);
   m_composite_renderpass = sps::vulkan::make_composite_renderpass(
     m_renderer->device().device(), m_renderer->swapchain().image_format(), true);
   m_render_graph.set_render_pass(Phase::CompositePass, m_composite_renderpass);
 
-  // Create SSS blur resources (needs command pool for one-shot layout transition)
-  create_blur_resources();
+  // Populate shared image registry (before framebuffer and stage construction)
+  m_render_graph.set_renderer(*m_renderer);
+  m_render_graph.image_registry().set("hdr",
+    { m_renderer->hdr_image(), m_renderer->hdr_image_view(), {}, m_renderer->hdr_format() });
+  m_render_graph.image_registry().set("depth_stencil",
+    { m_renderer->depth_stencil().image(), m_renderer->depth_stencil().stencil_view(),
+      {}, m_renderer->depth_format() });
 
-  // Create 2D debug pipeline (uses composite render pass)
-  create_debug_2d_pipeline();
-
-#if 1 // Enable ray tracing
-  spdlog::info("RT init check: supports_rt={}", m_renderer->device().supports_ray_tracing());
-  if (m_renderer->device().supports_ray_tracing())
-  {
-    spdlog::info("Starting RT initialization...");
-    build_acceleration_structures();
-    create_rt_storage_image();
-    create_rt_descriptor();
-    create_rt_pipeline();
-    spdlog::info("Ray tracing enabled");
-  }
-#endif
+  // Create scene framebuffers (uses registry images + scene render pass)
+  m_render_graph.create_scene_framebuffers();
 
   // Register render stages
   // Order within each phase doesn't matter — the render graph groups by phase.
   m_ray_tracing_stage = m_render_graph.add<RayTracingStage>(
-    &m_use_raytracing, &m_renderer->device(), m_rt_pipeline.get(), &m_rt_image, &m_rt_descriptor_set);
-  m_raster_opaque_stage = m_render_graph.add<RasterOpaqueStage>(
-    &m_use_raytracing, &m_debug_2d_mode, m_pipeline);
-  m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
-    &m_use_raytracing, &m_debug_2d_mode, m_blend_pipeline);
+    *m_renderer, m_render_graph, &m_use_raytracing, m_uniform_buffer->buffer());
+  if (m_renderer->device().supports_ray_tracing() && m_scene_manager->mesh())
+    m_ray_tracing_stage->on_mesh_changed(*m_scene_manager->mesh(), m_scene_manager->scene(), m_scene_manager->ibl());
+  create_raster_stages();
   m_sss_blur_stage = m_render_graph.add<SSSBlurStage>(
-    &m_use_sss_blur, &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b,
-    m_sss_blur_pipeline, m_sss_blur_pipelineLayout,
-    m_sss_blur_h_descriptor, m_sss_blur_v_descriptor,
-    m_renderer->hdr_image_ptr(), m_renderer->depth_stencil().image(), &m_blur_extent);
+    *m_renderer, m_render_graph,
+    &m_use_sss_blur, &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b);
   m_composite_stage = m_render_graph.add<CompositeStage>(
     *m_renderer, m_composite_renderpass, &m_exposure, &m_tonemap_mode);
   m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
-    &m_debug_2d_mode, &m_debug_material_index, m_debug_2d_pipeline, m_debug_2d_pipelineLayout);
+    *m_renderer, m_composite_renderpass, m_scene_manager->default_descriptor()->layout(),
+    &m_debug_2d_mode, &m_debug_material_index);
   m_ui_stage = m_render_graph.add<UIStage>(&m_ui_render_callback);
 }
 

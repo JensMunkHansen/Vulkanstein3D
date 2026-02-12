@@ -5,26 +5,32 @@
 namespace sps::vulkan
 {
 
+class RasterOpaqueStage;
+
 /// Draws BLEND primitives sorted back-to-front using the blend pipeline.
 /// Depth write is disabled; alpha blending is enabled.
+///
+/// Queries pipeline and layout from RasterOpaqueStage each frame — no stale handles
+/// even after shader hot-reload.
 class RasterBlendStage : public RenderStage
 {
 public:
-  RasterBlendStage(const bool* use_rt, const bool* debug_2d, vk::Pipeline pipeline)
-    : RenderStage("RasterBlendStage"), m_use_rt(use_rt), m_debug_2d(debug_2d),
-      m_pipeline(pipeline)
+  RasterBlendStage(const RasterOpaqueStage& opaque_stage,
+    const bool* use_rt, const bool* debug_2d)
+    : RenderStage("RasterBlendStage")
+    , m_opaque(opaque_stage)
+    , m_use_rt(use_rt)
+    , m_debug_2d(debug_2d)
   {
   }
 
   void record(const FrameContext& ctx) override;
   [[nodiscard]] bool is_enabled() const override;
 
-  void set_pipeline(vk::Pipeline pipeline) { m_pipeline = pipeline; }
-
 private:
+  const RasterOpaqueStage& m_opaque;
   const bool* m_use_rt;
   const bool* m_debug_2d;
-  vk::Pipeline m_pipeline;
 };
 
 } // namespace sps::vulkan
