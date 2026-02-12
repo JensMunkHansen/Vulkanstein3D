@@ -7,6 +7,7 @@
 namespace sps::vulkan
 {
 
+class RenderGraph;
 class VulkanRenderer;
 
 /// Fullscreen composite pass: samples the HDR buffer, applies exposure + tone mapping + gamma,
@@ -17,8 +18,8 @@ class VulkanRenderer;
 class CompositeStage : public RenderStage
 {
 public:
-  CompositeStage(const VulkanRenderer& renderer, vk::RenderPass render_pass,
-    const float* exposure, const int* tonemap_mode);
+  CompositeStage(const VulkanRenderer& renderer, const RenderGraph& graph,
+    vk::RenderPass render_pass, const float* exposure, const int* tonemap_mode);
   ~CompositeStage() override;
 
   CompositeStage(const CompositeStage&) = delete;
@@ -32,6 +33,7 @@ public:
 
 private:
   const VulkanRenderer& m_renderer;
+  const RenderGraph& m_graph;
   vk::RenderPass m_render_pass;
   const float* m_exposure;
   const int* m_tonemap_mode;

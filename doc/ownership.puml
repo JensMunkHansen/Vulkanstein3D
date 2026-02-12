@@ -1,0 +1,125 @@
+@startuml Ownership
+title High-Level Ownership
+skinparam backgroundColor white
+skinparam classBackgroundColor #F0F0F0
+skinparam packageBackgroundColor #FAFAFA
+
+package "VulkanRenderer (base)" as base {
+  class Window
+  class Instance
+  class Device
+  class WindowSurface
+  class Swapchain
+}
+
+class Application {
+  m_camera : Camera
+  m_clear_color : vec3
+  --
+  **read-only state**
+  (observed by stages via const*)
+  ..
+  m_use_raytracing : bool
+  m_use_sss_blur : bool
+  m_sss_blur_width_r/g/b : float
+  m_exposure : float
+  m_tonemap_mode : int
+  m_debug_2d_mode : bool
+  ...
+}
+
+class SceneManager {
+}
+
+class RenderGraph {
+}
+
+package "SceneManager contents" as sm_contents {
+  class Mesh
+  class "GltfScene" as Scene {
+    materials[]
+    primitives[]
+    bounds
+  }
+  class IBL {
+    BRDF LUT
+    irradiance cubemap
+    prefiltered cubemap
+  }
+  class "Default Textures (x8)" as Defaults
+  class "ResourceDescriptor[]" as Descriptors
+}
+
+package "Render Stages" as stages {
+  class RayTracingStage <<PrePass>>
+  class RasterOpaqueStage <<ScenePass>>
+  class RasterBlendStage <<ScenePass>>
+  class SSSBlurStage <<Intermediate>>
+  class CompositeStage <<CompositePass>>
+  class Debug2DStage <<CompositePass>>
+  class UIStage <<CompositePass>>
+}
+
+package "Vulkan Resources" as vk_res {
+  class "HDR Target" as HDR {
+    hdrImage (R16G16B16A16Sfloat)
+    hdrMsaaImage
+    hdrSampler
+  }
+  class "Blur Resources" as Blur {
+    blurPingImage
+    blur descriptors (H, V)
+    blur compute pipeline
+  }
+  class "Pipelines" as Pipes {
+    opaque pipeline
+    blend pipeline
+    composite pipeline
+    debug-2D pipeline
+  }
+  class "Render Passes" as RP {
+    scene renderpass + framebuffers
+    composite renderpass + framebuffers
+  }
+  class "RT Resources" as RT {
+    BLAS, TLAS
+    RT pipeline
+    RT storage image
+  }
+}
+
+class DepthStencilAttachment {
+  combined view
+  depth-only view
+  stencil-only view
+}
+
+class "UniformBuffer<UBO>" as UBO
+class Light
+class Camera
+
+' Inheritance
+Application -up-|> base
+
+' Application owns
+Application *-down- SceneManager
+Application *-down- RenderGraph
+Application *-down- DepthStencilAttachment
+Application *-down- UBO
+Application *-down- Light
+Application *-right- vk_res
+
+' SceneManager owns
+SceneManager *-down- sm_contents
+
+' RenderGraph owns
+RenderGraph *-down- stages
+
+' Stages observe Application state (const pointers)
+RayTracingStage .left.> Application : <<const*>>
+RasterOpaqueStage .left.> Application : <<const*>>
+SSSBlurStage .left.> Application : <<const*>>
+CompositeStage .left.> Application : <<const*>>
+Debug2DStage .left.> Application : <<const*>>
+
+@enduml

@@ -542,15 +542,14 @@ void Application::recreate_swapchain()
   // 6. Recreate per-swapchain-image semaphores
   m_renderer->recreate_sync_objects();
 
-  // 7. Recreate renderer-owned resources (depth-stencil, HDR, MSAA)
+  // 7. Recreate renderer-owned resources (depth-stencil) and graph-owned resources (HDR, MSAA)
   m_renderer->recreate_depth_resources();
-  m_renderer->recreate_hdr_resources();
+  m_render_graph.recreate_hdr_resources();
 
   // RT storage image handled by RayTracingStage::on_swapchain_resize()
 
   // Update shared image registry before recreating framebuffers and notifying stages
-  m_render_graph.image_registry().set("hdr",
-    { m_renderer->hdr_image(), m_renderer->hdr_image_view(), {}, m_renderer->hdr_format() });
+  // (HDR registry updated by recreate_hdr_resources above)
   m_render_graph.image_registry().set("depth_stencil",
     { m_renderer->depth_stencil().image(), m_renderer->depth_stencil().stencil_view(),
       {}, m_renderer->depth_format() });
@@ -652,7 +651,7 @@ void Application::render()
 void Application::create_scene_renderpass()
 {
   m_scene_renderpass = sps::vulkan::make_scene_renderpass(
-    m_renderer->device().device(), m_renderer->hdr_format(), m_renderer->depth_format(),
+    m_renderer->device().device(), RenderGraph::hdr_format(), m_renderer->depth_format(),
     true, m_renderer->msaa_samples());
 }
 
@@ -1124,7 +1123,8 @@ Application::~Application()
   // Scene framebuffers destroyed by RenderGraph destructor
   m_renderer->device().device().destroyRenderPass(m_composite_renderpass);
 
-  // Depth-stencil, HDR, MSAA destroyed by renderer
+  // HDR + MSAA destroyed by RenderGraph destructor
+  // Depth-stencil destroyed by renderer
   // SSS blur resources destroyed by SSSBlurStage (via RenderGraph)
   // RT resources destroyed by RayTracingStage (via RenderGraph)
 
@@ -1145,8 +1145,7 @@ void Application::finalize_setup()
   // Populate shared image registry (before framebuffer and stage construction)
   m_render_graph.set_renderer(*m_renderer);
   m_render_graph.create_material_descriptor_layout();
-  m_render_graph.image_registry().set("hdr",
-    { m_renderer->hdr_image(), m_renderer->hdr_image_view(), {}, m_renderer->hdr_format() });
+  m_render_graph.create_hdr_resources();
   m_render_graph.image_registry().set("depth_stencil",
     { m_renderer->depth_stencil().image(), m_renderer->depth_stencil().stencil_view(),
       {}, m_renderer->depth_format() });
@@ -1166,7 +1165,7 @@ void Application::finalize_setup()
     &m_use_sss_blur, &m_use_raytracing,
     &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b);
   m_composite_stage = m_render_graph.add<CompositeStage>(
-    *m_renderer, m_composite_renderpass, &m_exposure, &m_tonemap_mode);
+    *m_renderer, m_render_graph, m_composite_renderpass, &m_exposure, &m_tonemap_mode);
   m_render_graph.set_composite_stage(m_composite_stage);
   m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
     *m_renderer, m_composite_renderpass, m_render_graph,

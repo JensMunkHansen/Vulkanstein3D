@@ -138,6 +138,20 @@ public:
   /// Register the composite stage so the graph can query its framebuffer.
   void set_composite_stage(const CompositeStage* stage);
 
+  /// Create the HDR image, sampler, optional MSAA color target, and register in the image registry.
+  /// Call after set_renderer() but before adding stages that need the HDR image.
+  void create_hdr_resources();
+
+  /// Destroy and recreate HDR + MSAA images, then update the registry.
+  /// Call during swapchain resize, before recreate_scene_framebuffers().
+  void recreate_hdr_resources();
+
+  /// The HDR image format (static, never changes).
+  [[nodiscard]] static constexpr vk::Format hdr_format() { return vk::Format::eR16G16B16A16Sfloat; }
+
+  /// The HDR sampler (immutable, created once).
+  [[nodiscard]] vk::Sampler hdr_sampler() const;
+
   /// Shared image registry for cross-stage resource access.
   [[nodiscard]] SharedImageRegistry& image_registry() { return m_image_registry; }
   [[nodiscard]] const SharedImageRegistry& image_registry() const { return m_image_registry; }
@@ -157,6 +171,21 @@ private:
 
   void destroy_scene_framebuffers();
   void destroy_material_pool();
+
+  // HDR image (single-sample resolve target + composite source)
+  static constexpr vk::Format m_hdr_format = vk::Format::eR16G16B16A16Sfloat;
+  vk::Image m_hdr_image{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_hdr_image_memory{ VK_NULL_HANDLE };
+  vk::ImageView m_hdr_image_view{ VK_NULL_HANDLE };
+  vk::Sampler m_hdr_sampler{ VK_NULL_HANDLE };
+
+  // MSAA color target (resolves to m_hdr_image in scene framebuffer)
+  vk::Image m_hdr_msaa_image{ VK_NULL_HANDLE };
+  vk::DeviceMemory m_hdr_msaa_image_memory{ VK_NULL_HANDLE };
+  vk::ImageView m_hdr_msaa_image_view{ VK_NULL_HANDLE };
+
+  void destroy_hdr_resources();
+  void create_msaa_color_resources();
 
   /// Write one descriptor set with a UBO and 11 texture bindings.
   void write_material_set(vk::DescriptorSet set,

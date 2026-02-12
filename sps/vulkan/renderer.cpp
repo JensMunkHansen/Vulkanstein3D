@@ -98,12 +98,7 @@ VulkanRenderer::VulkanRenderer(const RendererConfig& config)
   // 8. Depth-stencil buffer
   create_depth_resources();
 
-  // 9. HDR offscreen + optional MSAA color target
-  create_hdr_resources();
-  if (m_msaa_samples != vk::SampleCountFlagBits::e1)
-  {
-    create_msaa_color_resources();
-  }
+  // HDR + MSAA color target created by RenderGraph::create_hdr_resources()
 }
 
 void VulkanRenderer::create_sync_objects()
@@ -145,158 +140,6 @@ void VulkanRenderer::recreate_depth_resources()
   create_depth_resources();
 }
 
-void VulkanRenderer::create_hdr_resources()
-{
-  auto dev = m_device->device();
-  vk::Extent2D extent = m_swapchain->extent();
-
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.format = m_hdr_format;
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-  imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
-    | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst;
-  imageInfo.samples = vk::SampleCountFlagBits::e1;
-  imageInfo.sharingMode = vk::SharingMode::eExclusive;
-
-  m_hdr_image = dev.createImage(imageInfo);
-
-  vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_hdr_image);
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
-    memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_hdr_image_memory = dev.allocateMemory(allocInfo);
-  dev.bindImageMemory(m_hdr_image, m_hdr_image_memory, 0);
-
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_hdr_image;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_hdr_format;
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_hdr_image_view = dev.createImageView(viewInfo);
-
-  if (!m_hdr_sampler)
-  {
-    vk::SamplerCreateInfo samplerInfo{};
-    samplerInfo.magFilter = vk::Filter::eLinear;
-    samplerInfo.minFilter = vk::Filter::eLinear;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    m_hdr_sampler = dev.createSampler(samplerInfo);
-  }
-
-  spdlog::trace("Created HDR image {}x{}", extent.width, extent.height);
-}
-
-void VulkanRenderer::create_msaa_color_resources()
-{
-  vk::Extent2D extent = m_swapchain->extent();
-
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.format = m_hdr_format;
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-  imageInfo.usage =
-    vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
-  imageInfo.samples = m_msaa_samples;
-  imageInfo.sharingMode = vk::SharingMode::eExclusive;
-
-  m_hdr_msaa_image = m_device->device().createImage(imageInfo);
-
-  vk::MemoryRequirements memRequirements =
-    m_device->device().getImageMemoryRequirements(m_hdr_msaa_image);
-
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex = m_device->find_memory_type(
-    memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_hdr_msaa_image_memory = m_device->device().allocateMemory(allocInfo);
-  m_device->device().bindImageMemory(m_hdr_msaa_image, m_hdr_msaa_image_memory, 0);
-
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_hdr_msaa_image;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_hdr_format;
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_hdr_msaa_image_view = m_device->device().createImageView(viewInfo);
-
-  spdlog::trace("Created HDR MSAA color image {}x{} ({}x samples)", extent.width, extent.height,
-    static_cast<int>(m_msaa_samples));
-}
-
-void VulkanRenderer::destroy_hdr_resources()
-{
-  auto dev = m_device->device();
-
-  if (m_hdr_image_view)
-  {
-    dev.destroyImageView(m_hdr_image_view);
-    m_hdr_image_view = VK_NULL_HANDLE;
-  }
-  if (m_hdr_image)
-  {
-    dev.destroyImage(m_hdr_image);
-    m_hdr_image = VK_NULL_HANDLE;
-  }
-  if (m_hdr_image_memory)
-  {
-    dev.freeMemory(m_hdr_image_memory);
-    m_hdr_image_memory = VK_NULL_HANDLE;
-  }
-
-  if (m_hdr_msaa_image_view)
-  {
-    dev.destroyImageView(m_hdr_msaa_image_view);
-    m_hdr_msaa_image_view = VK_NULL_HANDLE;
-  }
-  if (m_hdr_msaa_image)
-  {
-    dev.destroyImage(m_hdr_msaa_image);
-    m_hdr_msaa_image = VK_NULL_HANDLE;
-  }
-  if (m_hdr_msaa_image_memory)
-  {
-    dev.freeMemory(m_hdr_msaa_image_memory);
-    m_hdr_msaa_image_memory = VK_NULL_HANDLE;
-  }
-}
-
-void VulkanRenderer::recreate_hdr_resources()
-{
-  destroy_hdr_resources();
-  create_hdr_resources();
-  if (m_msaa_samples != vk::SampleCountFlagBits::e1)
-  {
-    create_msaa_color_resources();
-  }
-}
-
 bool VulkanRenderer::save_screenshot(const std::string& filepath)
 {
   m_device->wait_idle();
@@ -325,10 +168,7 @@ VulkanRenderer::~VulkanRenderer()
   }
   m_device->wait_idle();
 
-  // Destroy rendering resources before command pool and device
-  destroy_hdr_resources();
-  if (m_hdr_sampler)
-    m_device->device().destroySampler(m_hdr_sampler);
+  // HDR + MSAA destroyed by RenderGraph destructor
   m_depth_stencil.reset();
 
   m_in_flight.reset();

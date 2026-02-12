@@ -135,7 +135,7 @@ void SSSBlurStage::create_ping_image()
   imageInfo.extent.depth = 1;
   imageInfo.mipLevels = 1;
   imageInfo.arrayLayers = 1;
-  imageInfo.format = m_renderer.hdr_format();
+  imageInfo.format = RenderGraph::hdr_format();
   imageInfo.tiling = vk::ImageTiling::eOptimal;
   imageInfo.initialLayout = vk::ImageLayout::eUndefined;
   imageInfo.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
@@ -156,7 +156,7 @@ void SSSBlurStage::create_ping_image()
   vk::ImageViewCreateInfo viewInfo{};
   viewInfo.image = m_ping_image;
   viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_renderer.hdr_format();
+  viewInfo.format = RenderGraph::hdr_format();
   viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
   viewInfo.subresourceRange.baseMipLevel = 0;
   viewInfo.subresourceRange.levelCount = 1;

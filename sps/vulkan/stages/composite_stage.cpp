@@ -3,15 +3,17 @@
 #include <spdlog/spdlog.h>
 #include <sps/vulkan/config.h>
 #include <sps/vulkan/pipeline.h>
+#include <sps/vulkan/render_graph.h>
 #include <sps/vulkan/renderer.h>
 
 namespace sps::vulkan
 {
 
-CompositeStage::CompositeStage(const VulkanRenderer& renderer, vk::RenderPass render_pass,
-  const float* exposure, const int* tonemap_mode)
+CompositeStage::CompositeStage(const VulkanRenderer& renderer, const RenderGraph& graph,
+  vk::RenderPass render_pass, const float* exposure, const int* tonemap_mode)
   : RenderStage("CompositeStage")
   , m_renderer(renderer)
+  , m_graph(graph)
   , m_render_pass(render_pass)
   , m_exposure(exposure)
   , m_tonemap_mode(tonemap_mode)
@@ -80,9 +82,10 @@ void CompositeStage::update_descriptor()
 {
   auto dev = m_renderer.device().device();
 
+  const auto* hdr = m_graph.image_registry().get("hdr");
   vk::DescriptorImageInfo imageInfo{};
-  imageInfo.sampler = m_renderer.hdr_sampler();
-  imageInfo.imageView = m_renderer.hdr_image_view();
+  imageInfo.sampler = hdr->sampler;
+  imageInfo.imageView = hdr->image_view;
   imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
 
   vk::WriteDescriptorSet write{};

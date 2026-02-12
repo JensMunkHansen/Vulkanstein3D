@@ -43,7 +43,7 @@ void RasterOpaqueStage::create_pipelines()
   specification.vertexFilepath = m_vertex_shader;
   specification.fragmentFilepath = m_fragment_shader;
   specification.swapchainExtent = m_renderer.swapchain().extent();
-  specification.swapchainImageFormat = m_renderer.hdr_format();
+  specification.swapchainImageFormat = RenderGraph::hdr_format();
   specification.descriptorSetLayout = m_graph.material_descriptor_layout();
 
   auto binding = Vertex::binding_description();

@@ -69,15 +69,6 @@ public:
   [[nodiscard]] vk::Format depth_format() const { return m_depth_format; }
   void recreate_depth_resources();
 
-  // HDR offscreen + MSAA color
-  [[nodiscard]] vk::Image hdr_image() const { return m_hdr_image; }
-  [[nodiscard]] vk::Image* hdr_image_ptr() { return &m_hdr_image; }
-  [[nodiscard]] vk::ImageView hdr_image_view() const { return m_hdr_image_view; }
-  [[nodiscard]] vk::Sampler hdr_sampler() const { return m_hdr_sampler; }
-  [[nodiscard]] vk::ImageView hdr_msaa_image_view() const { return m_hdr_msaa_image_view; }
-  [[nodiscard]] vk::Format hdr_format() const { return m_hdr_format; }
-  void recreate_hdr_resources();
-
   // MSAA
   [[nodiscard]] vk::SampleCountFlagBits msaa_samples() const { return m_msaa_samples; }
 
@@ -133,21 +124,5 @@ private:
   // Depth-stencil
   std::unique_ptr<DepthStencilAttachment> m_depth_stencil;
   void create_depth_resources();
-
-  // HDR offscreen target (single-sample, for composite sampling)
-  static constexpr vk::Format m_hdr_format = vk::Format::eR16G16B16A16Sfloat;
-  vk::Image m_hdr_image{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_hdr_image_memory{ VK_NULL_HANDLE };
-  vk::ImageView m_hdr_image_view{ VK_NULL_HANDLE };
-  vk::Sampler m_hdr_sampler{ VK_NULL_HANDLE };
-
-  // HDR MSAA color target (multi-sample, resolves to m_hdr_image)
-  vk::Image m_hdr_msaa_image{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_hdr_msaa_image_memory{ VK_NULL_HANDLE };
-  vk::ImageView m_hdr_msaa_image_view{ VK_NULL_HANDLE };
-
-  void create_hdr_resources();
-  void destroy_hdr_resources();
-  void create_msaa_color_resources();
 };
 }

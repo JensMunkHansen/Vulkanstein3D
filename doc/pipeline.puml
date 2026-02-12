@@ -1,0 +1,60 @@
+@startuml Render Pipeline
+title Render Pipeline
+left to right direction
+skinparam backgroundColor white
+skinparam componentBackgroundColor #F0F0F0
+skinparam storageBackgroundColor #FFFFDD
+skinparam nodeBackgroundColor #E8F0FE
+
+' ── Stages ──────────────────────────────────────────────
+node "**Phase 1**\nPrePass" as P1 {
+  component "RayTracingStage" as RT
+}
+
+node "**Phase 2**\nScenePass\n(HDR render pass)" as P2 {
+  component "RasterOpaqueStage" as RO
+  component "RasterBlendStage" as RB
+  RO -down-> RB
+}
+
+node "**Phase 3**\nIntermediate\n(compute)" as P3 {
+  component "SSSBlurStage" as BLUR
+}
+
+node "**Phase 4**\nCompositePass\n(swapchain render pass)" as P4 {
+  component "CompositeStage" as COMP
+  component "Debug2DStage" as DBG
+  component "UIStage" as UI
+  COMP -down-> DBG
+  DBG -down-> UI
+}
+
+' ── Data stores ─────────────────────────────────────────
+storage "RT image" as rt_img
+storage "HDR color\nR16G16B16A16Sfloat" as hdr
+storage "Depth + Stencil\nD32Sfloat S8Uint" as ds
+storage "Ping image\n(blur temp)" as ping
+storage "Swapchain\n(UNORM)" as swap
+
+' ── Flow ────────────────────────────────────────────────
+P1 --> P2
+P2 --> P3
+P3 --> P4
+
+' Stage outputs
+RT --> rt_img : writes
+
+RO --> hdr : HDR color\n+ alpha (SSS mask)
+RO --> ds : depth + stencil
+RB --> hdr : blended color
+
+BLUR --> ping : H pass
+ping --> BLUR : V pass reads
+BLUR --> hdr : V pass writes back
+
+hdr --> COMP : samples HDR
+COMP --> swap : tonemapped\n+ gamma
+DBG --> swap : texture overlay
+UI --> swap : ImGui
+
+@enduml
