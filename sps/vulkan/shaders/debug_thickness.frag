@@ -35,9 +35,12 @@ void main()
 {
   float thickness = texture(thicknessTexture, fragTexCoord).g * pc.thicknessFactor;
 
-  // Heat map: thin=blue, medium=green, thick=red
+  // Heat map: zero=black, thin=blue, medium=green, thick=red
+  // Black for no thickness data (models without KHR_materials_volume have thicknessFactor=0)
   vec3 color;
-  if (thickness < 0.5) {
+  if (thickness <= 0.0) {
+    color = vec3(0.0);
+  } else if (thickness < 0.5) {
     color = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0), thickness * 2.0);
   } else {
     color = mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), (thickness - 0.5) * 2.0);

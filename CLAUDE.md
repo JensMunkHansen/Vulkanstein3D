@@ -73,8 +73,42 @@ Migrate remaining stages to own their pipelines/descriptors following CompositeS
 - `RasterOpaqueStage` / `RasterBlendStage` — share a pipeline layout, need coordinated approach
 - `RayTracingStage` — owns storage image, descriptor, acceleration structures, pipeline
 
+#### Near-term: Descriptor ownership refactor
+
+**Problem**: SceneManager currently owns descriptor set layouts, but stages consume them via cached handles. Any operation that recreates descriptors (model load, HDR switch) invalidates those handles. The current workaround (`update_descriptor_layout()` calls after every descriptor recreation) is fragile — missing a single call site causes a stale-handle crash on the next pipeline rebuild (e.g., shader mode switch).
+
+**Design**: Two-tier descriptor ownership based on sharing potential:
+
+1. **Graph-managed descriptors** — for consecutive stages that share the same bindings. The graph owns the descriptor set layout and allocates per-frame sets. Stages receive sets via `FrameContext`, never cache layout handles.
+   - RasterOpaqueStage + RasterBlendStage already share a pipeline layout. They should share a graph-managed material descriptor layout too.
+   - When a model is loaded, SceneManager provides textures/materials; the graph rebuilds descriptor sets against its stable layout.
+
+2. **Stage-owned descriptors** — for stages with unique binding requirements. The stage creates its own layout at construction and manages its own per-frame sets.
+   - Already done: CompositeStage, SSSBlurStage, RayTracingStage
+   - Future: pre-raycast thickness stage (needs AS + UBO + output image, no material textures)
+
+**Shader variants are the stage's responsibility**: A stage that supports multiple shaders (RasterOpaqueStage: PBR, thickness, debug modes) must ensure all shader variants conform to the same descriptor layout. Shader switch = pipeline swap only, never layout recreation. This eliminates the current stale-layout crash by design.
+
+**Lifecycle**:
+1. **Register** — Stages declare binding requirements to the graph at registration time.
+2. **Validate** — Graph checks compatibility across connected stages (same phase, shared layout). Catches mismatches at startup rather than at draw time.
+3. **Allocate** — Each stage requests resources from the graph. Graph creates shared layouts for compatible groups, private layouts for unique stages.
+4. **Ring-buffer** — Graph knows N (frames in flight) and allocates N copies of all mutable resources (descriptor sets, framebuffers, storage images). Stages never know N — they receive the right resource for the current frame via `frame_index` in `FrameContext`.
+
+**SceneManager's role shrinks**: Loads textures and materials, provides them to the graph or stages. No longer owns descriptor set layouts or pools.
+
+| Descriptor owner | Stages | Bindings |
+|-----------------|--------|----------|
+| Graph (shared) | RasterOpaque + RasterBlend | UBO + 12 material textures |
+| Stage (own) | CompositeStage | HDR sampler |
+| Stage (own) | SSSBlurStage | 2 storage images + depth sampler |
+| Stage (own) | RayTracingStage | AS + storage image + UBO + textures + material indices |
+| Stage (own) | Future thickness pre-raycast | AS + UBO + output storage image |
+
 #### Medium-term: Multiple frames in flight
 Currently single-fence (one frame at a time). With self-contained stages, multiple frames in flight becomes a local decision per stage rather than a global one managed by the app. The graph provides a `frame_index` (0..N-1), and each stage indexes into its own ring of per-frame resources. Read-only resources (pipeline, sampler, render pass) stay shared; write-per-frame resources (descriptor sets, framebuffers) get indexed. The stage is the right granularity for knowing what needs duplication — the app shouldn't have to know that CompositeStage needs N descriptor sets but SSSBlurStage needs N ping images.
+
+The descriptor ownership refactor (above) is a prerequisite: graph-managed descriptors naturally extend to per-frame allocation (the graph allocates N sets per shared layout), and stage-owned descriptors are already local (each stage duplicates its own sets).
 
 #### Medium-term: Dynamic rendering (VK_KHR_dynamic_rendering)
 - Eliminates `VkRenderPass` and `VkFramebuffer` — attachments specified inline with `vkCmdBeginRendering`

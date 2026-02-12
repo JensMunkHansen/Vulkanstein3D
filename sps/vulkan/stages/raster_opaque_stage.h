@@ -39,6 +39,9 @@ public:
   [[nodiscard]] const std::string& current_vertex_shader() const { return m_vertex_shader; }
   [[nodiscard]] const std::string& current_fragment_shader() const { return m_fragment_shader; }
 
+  /// Update the cached descriptor set layout (call after model switch).
+  void update_descriptor_layout(vk::DescriptorSetLayout layout) { m_material_layout = layout; }
+
   /// Shared resources for RasterBlendStage.
   [[nodiscard]] vk::Pipeline blend_pipeline() const { return m_blend_pipeline; }
   [[nodiscard]] vk::PipelineLayout pipeline_layout() const { return m_pipeline_layout; }

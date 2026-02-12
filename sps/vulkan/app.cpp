@@ -758,12 +758,16 @@ void Application::reload_shaders(
   const std::string& vertex_shader, const std::string& fragment_shader)
 {
   m_renderer->device().wait_idle();
+  // Ensure descriptor layout is current before pipeline recreation
+  m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
   m_raster_opaque_stage->reload_shaders(vertex_shader, fragment_shader);
 }
 
 void Application::apply_shader_mode(int mode)
 {
   m_renderer->device().wait_idle();
+  // Ensure descriptor layout is current before pipeline recreation
+  m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
   m_raster_opaque_stage->apply_shader_mode(mode);
 }
 
@@ -1020,6 +1024,10 @@ void Application::load_model(int index)
     }
   }
 
+  // Update raster stages with new descriptor layout (old one was destroyed in create_descriptors)
+  if (m_raster_opaque_stage)
+    m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
+
   // RT rebuild (delegated to self-contained stage)
   if (m_ray_tracing_stage && m_scene_manager->mesh())
     m_ray_tracing_stage->on_mesh_changed(*m_scene_manager->mesh(), m_scene_manager->scene(), m_scene_manager->ibl());
@@ -1040,6 +1048,10 @@ void Application::load_hdr(int index)
   m_renderer->device().wait_idle();
   m_scene_manager->load_hdr(m_hdr_files[index], m_uniform_buffer->buffer());
   m_current_hdr_index = index;
+
+  // Update raster stages with new descriptor layout (load_hdr rebuilds descriptors)
+  if (m_raster_opaque_stage)
+    m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
 
   // Update RT environment cubemap
   if (m_ray_tracing_stage && m_scene_manager->ibl())
@@ -1154,7 +1166,8 @@ void Application::finalize_setup()
   create_raster_stages();
   m_sss_blur_stage = m_render_graph.add<SSSBlurStage>(
     *m_renderer, m_render_graph,
-    &m_use_sss_blur, &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b);
+    &m_use_sss_blur, &m_use_raytracing,
+    &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b);
   m_composite_stage = m_render_graph.add<CompositeStage>(
     *m_renderer, m_composite_renderpass, &m_exposure, &m_tonemap_mode);
   m_debug_2d_stage = m_render_graph.add<Debug2DStage>(

@@ -12,12 +12,13 @@ namespace sps::vulkan
 {
 
 SSSBlurStage::SSSBlurStage(const VulkanRenderer& renderer, RenderGraph& graph,
-  const bool* enabled,
+  const bool* enabled, const bool* use_rt,
   const float* blur_width_r, const float* blur_width_g, const float* blur_width_b)
   : RenderStage("SSSBlurStage")
   , m_renderer(renderer)
   , m_graph(graph)
   , m_enabled(enabled)
+  , m_use_rt(use_rt)
   , m_blur_width_r(blur_width_r)
   , m_blur_width_g(blur_width_g)
   , m_blur_width_b(blur_width_b)

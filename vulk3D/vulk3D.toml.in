@@ -117,6 +117,10 @@ files = [
 files = [
       "@DATA_DIR@/neutral.hdr",
       "@DATA_DIR@/footprint_court.hdr",
+      "@DATA_DIR@/hospital_room.hdr",
+      "@DATA_DIR@/hospital_room_2.hdr",
+      "@DATA_DIR@/surgery.hdr",
+      "@DATA_DIR@/childrens_hospital.hdr",
 ]
 
 [IBL]

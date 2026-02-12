@@ -92,7 +92,7 @@ private:
   void destroy_storage_image();
   void create_descriptor(const Mesh& mesh, const GltfScene* scene, const IBL* ibl);
   void create_pipeline();
-  void build_acceleration_structures(const Mesh& mesh);
+  void build_acceleration_structures(const Mesh& mesh, const GltfScene* scene);
   void build_material_index_buffer(const Mesh& mesh, const GltfScene* scene);
   void update_from_registry();
 };

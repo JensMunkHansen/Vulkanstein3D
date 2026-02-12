@@ -74,6 +74,19 @@ function(fetch_hdr_environment name)
   )
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Download an HDR environment from Poly Haven (CC0 licensed)
+# Uses 1k resolution — sufficient for IBL cubemap generation
+# ---------------------------------------------------------------------------
+set(_POLYHAVEN_HDR_BASE "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k")
+
+function(fetch_polyhaven_hdr name)
+  _download_asset(
+    "${_POLYHAVEN_HDR_BASE}/${name}_1k.hdr"
+    "${_DATA_DIR}/${name}.hdr"
+  )
+endfunction()
+
 # ===========================================================================
 # Asset lists — add new entries here
 # ===========================================================================
@@ -99,6 +112,12 @@ set(_HDR_ENVIRONMENTS
 foreach(_env IN LISTS _HDR_ENVIRONMENTS)
   fetch_hdr_environment(${_env})
 endforeach()
+
+# Poly Haven HDR environments (medical/clinical, CC0 licensed)
+fetch_polyhaven_hdr(hospital_room)
+fetch_polyhaven_hdr(hospital_room_2)
+fetch_polyhaven_hdr(surgery)
+fetch_polyhaven_hdr(childrens_hospital)
 
 # Models without a GLB variant (must list individual files)
 fetch_gltf_model_files(IridescenceMetallicSpheres glTF

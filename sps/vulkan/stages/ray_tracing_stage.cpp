@@ -381,7 +381,7 @@ void RayTracingStage::create_pipeline()
     static_cast<uint32_t>(sizeof(Vertex) / sizeof(float)));
 }
 
-void RayTracingStage::build_acceleration_structures(const Mesh& mesh)
+void RayTracingStage::build_acceleration_structures(const Mesh& mesh, const GltfScene* scene)
 {
   if (!m_renderer.device().supports_ray_tracing())
   {
@@ -405,10 +405,18 @@ void RayTracingStage::build_acceleration_structures(const Mesh& mesh)
   m_blas = std::make_unique<AccelerationStructure>(m_renderer.device(), "mesh BLAS");
   m_blas->build_blas(cmd, mesh);
 
-  // Build TLAS
+  // Build TLAS — use the scene's node transform so RT matches raster orientation.
+  // Vertices are stored in local/object space; the raster path applies per-primitive
+  // modelMatrix in the vertex shader. For RT we apply it as the TLAS instance transform.
+  glm::mat4 instance_transform = glm::mat4(1.0f);
+  if (scene && !scene->primitives.empty())
+  {
+    instance_transform = scene->primitives[0].modelMatrix;
+  }
+
   m_tlas = std::make_unique<AccelerationStructure>(m_renderer.device(), "scene TLAS");
   std::vector<std::pair<const AccelerationStructure*, glm::mat4>> instances;
-  instances.push_back({ m_blas.get(), glm::mat4(1.0f) });
+  instances.push_back({ m_blas.get(), instance_transform });
   m_tlas->build_tlas(cmd, instances);
 
   cmd.end();
@@ -434,7 +442,7 @@ void RayTracingStage::on_mesh_changed(const Mesh& mesh, const GltfScene* scene, 
   m_blas.reset();
 
   // Rebuild
-  build_acceleration_structures(mesh);
+  build_acceleration_structures(mesh, scene);
   build_material_index_buffer(mesh, scene);
 
   // Rebuild descriptor (pool is not reusable after free — destroy and recreate)
