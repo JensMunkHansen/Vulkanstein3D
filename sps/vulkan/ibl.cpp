@@ -641,6 +641,8 @@ void IBL::run_compute_generation()
   }
 
   // DS 3+: Prefilter per-mip (cubemap sampler + per-mip storage view)
+  // Sampler layout is eGeneral because during the per-mip prefilter loop,
+  // the target mip is in GENERAL while the sampler view covers all mips.
   for (uint32_t mip = 1; mip < m_mip_levels; ++mip)
   {
     uint32_t ds_idx = 3 + (mip - 1); // desc_sets[3] = mip 1, [4] = mip 2, etc.
@@ -648,7 +650,7 @@ void IBL::run_compute_generation()
     vk::DescriptorImageInfo env_info{};
     env_info.sampler = m_prefiltered_sampler;
     env_info.imageView = m_prefiltered_view;
-    env_info.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    env_info.imageLayout = vk::ImageLayout::eGeneral;
 
     vk::DescriptorImageInfo storage_info{};
     storage_info.imageView = prefilter_mip_views[mip];
@@ -776,8 +778,13 @@ void IBL::run_compute_generation()
     vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 
   // ========= Stage 4: Prefiltered GGX (per mip level, skip mip 0 = raw copy) =========
-  // Mip 0 stays in ShaderReadOnly (it's our source via the sampler)
-  // Per-mip descriptor sets were pre-allocated above (desc_sets[3+mip-1])
+  // All mips go to GENERAL for the duration of the prefilter loop.
+  // The sampler view covers all mips, so they must all be in the same layout
+  // as declared in the descriptor (eGeneral).
+  transition_image_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eGeneral, m_mip_levels, 6,
+    vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+    vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
 
   cmd.bindPipeline(vk::PipelineBindPoint::eCompute, prefilter_pipeline.pipeline);
 
@@ -786,12 +793,6 @@ void IBL::run_compute_generation()
     float roughness = std::min(1.0f, static_cast<float>(mip) / MAX_REFLECTION_LOD);
     uint32_t mip_size = std::max(1u, m_resolution >> mip);
     uint32_t ds_idx = 3 + (mip - 1);
-
-    // Transition this mip to General for writes
-    transition_mip_layout(cmd, m_prefiltered_image,
-      vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eGeneral, mip, 6,
-      vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-      vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eShaderWrite);
 
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, prefilter_pipeline.layout,
       0, desc_sets[ds_idx], {});
@@ -808,12 +809,27 @@ void IBL::run_compute_generation()
       cmd.dispatch((mip_size + 7) / 8, (mip_size + 7) / 8, 1);
     }
 
-    // Transition back to shader read
-    transition_mip_layout(cmd, m_prefiltered_image,
-      vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, mip, 6,
-      vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-      vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+    // Memory barrier: ensure writes to this mip are visible before next mip reads it
+    vk::ImageMemoryBarrier barrier{};
+    barrier.srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+    barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+    barrier.oldLayout = vk::ImageLayout::eGeneral;
+    barrier.newLayout = vk::ImageLayout::eGeneral;
+    barrier.image = m_prefiltered_image;
+    barrier.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    barrier.subresourceRange.baseMipLevel = mip;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 6;
+    cmd.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+      vk::PipelineStageFlagBits::eComputeShader, {}, {}, {}, barrier);
   }
+
+  // Transition all mips to shader read for fragment sampling
+  transition_image_layout(cmd, m_prefiltered_image,
+    vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, m_mip_levels, 6,
+    vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eFragmentShader,
+    vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 
   // ========= Stage 5: BRDF LUT =========
   transition_image_layout(cmd, m_brdf_lut_image,

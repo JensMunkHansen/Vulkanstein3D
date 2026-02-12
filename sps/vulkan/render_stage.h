@@ -43,7 +43,6 @@ struct FrameContext
   vk::PipelineLayout pipeline_layout;
 
   // Composite render pass infrastructure (swapchain target)
-  vk::RenderPass composite_render_pass;
   vk::Framebuffer composite_framebuffer;
 
   // Scene data (read-only, not owned)

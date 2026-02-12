@@ -2,6 +2,7 @@
 
 #include <sps/vulkan/render_stage.h>
 
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -41,8 +42,15 @@ public:
   /// Propagate swapchain resize to all stages.
   void on_swapchain_resize(const Device& device, vk::Extent2D extent);
 
+  /// Register a shared render pass for a given phase.
+  void set_render_pass(Phase phase, vk::RenderPass rp);
+
+  /// Retrieve the shared render pass for a given phase.
+  [[nodiscard]] vk::RenderPass render_pass(Phase phase) const;
+
 private:
   std::vector<std::unique_ptr<RenderStage>> m_stages;
+  std::array<vk::RenderPass, 4> m_render_passes{};
 };
 
 } // namespace sps::vulkan

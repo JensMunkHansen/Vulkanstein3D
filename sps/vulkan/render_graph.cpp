@@ -118,7 +118,7 @@ void RenderGraph::record(const FrameContext& ctx)
     clearValues[0].color = vk::ClearColorValue{
       std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } };
 
-    begin_render_pass(ctx, ctx.composite_render_pass, ctx.composite_framebuffer,
+    begin_render_pass(ctx, m_render_passes[static_cast<int>(Phase::CompositePass)], ctx.composite_framebuffer,
       static_cast<uint32_t>(clearValues.size()), clearValues.data());
 
     for (auto& stage : m_stages)
@@ -139,6 +139,16 @@ void RenderGraph::on_swapchain_resize(const Device& device, vk::Extent2D extent)
   {
     stage->on_swapchain_resize(device, extent);
   }
+}
+
+void RenderGraph::set_render_pass(Phase phase, vk::RenderPass rp)
+{
+  m_render_passes[static_cast<int>(phase)] = rp;
+}
+
+vk::RenderPass RenderGraph::render_pass(Phase phase) const
+{
+  return m_render_passes[static_cast<int>(phase)];
 }
 
 } // namespace sps::vulkan

@@ -59,6 +59,7 @@ RendererConfig Application::build_renderer_config(int argc, char** argv, AppConf
   config.window_height = app_config.window_height;
   config.window_mode = app_config.window_mode;
   config.preferred_gpu = app_config.preferred_gpu;
+  config.msaa_samples = app_config.msaa_samples;
 
   auto enable_renderdoc = cla_parser.arg<bool>("--renderdoc");
   if (enable_renderdoc)
@@ -138,27 +139,11 @@ Application::Application(int argc, char** argv)
   // Setup camera
   setup_camera();
 
-  // Clamp MSAA to device maximum
-  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
-  {
-    auto maxSamples = m_renderer->device().max_usable_sample_count();
-    if (m_msaaSamples > maxSamples)
-    {
-      spdlog::warn("Requested MSAA {}x exceeds device max {}x, clamping",
-        static_cast<int>(m_msaaSamples), static_cast<int>(maxSamples));
-      m_msaaSamples = maxSamples;
-    }
-    spdlog::info("MSAA enabled: {}x", static_cast<int>(m_msaaSamples));
-  }
-
   // Create scene manager and load initial scene
   m_scene_manager = std::make_unique<SceneManager>(m_renderer->device());
   m_scene_manager->set_ibl_settings(m_ibl_settings);
   m_scene_manager->create_defaults(m_hdr_file);
   auto load_result = m_scene_manager->load_initial_scene(m_geometry_source, m_gltf_file, m_ply_file);
-
-  // Create depth buffer
-  create_depth_resources();
 
   // Create uniform buffer and descriptor
   create_uniform_buffer();
@@ -195,7 +180,6 @@ Application::Application(int argc, char** argv)
 void Application::apply_config(AppConfig config)
 {
   m_backfaceCulling = config.backface_culling;
-  m_msaaSamples = config.msaa_samples;
   m_use_raytracing = config.use_raytracing;
   m_geometry_source = std::move(config.geometry_source);
   m_ply_file = std::move(config.ply_file);
@@ -225,270 +209,11 @@ void Application::setup_camera()
   m_camera.set_aspect_ratio(static_cast<float>(width) / static_cast<float>(height));
 }
 
-void Application::create_depth_resources()
-{
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-
-  m_depthStencil = std::make_unique<DepthStencilAttachment>(
-    m_renderer->device(), m_depthFormat, extent, m_msaaSamples);
-
-  spdlog::trace("Created depth-stencil buffer {}x{}", extent.width, extent.height);
-}
-
-void Application::create_msaa_color_resources()
-{
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-
-  // MSAA color target uses HDR format (resolves to m_hdrImage)
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.format = m_hdrFormat;
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-  imageInfo.usage =
-    vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
-  imageInfo.samples = m_msaaSamples;
-  imageInfo.sharingMode = vk::SharingMode::eExclusive;
-
-  m_hdrMsaaImage = m_renderer->device().device().createImage(imageInfo);
-
-  vk::MemoryRequirements memRequirements =
-    m_renderer->device().device().getImageMemoryRequirements(m_hdrMsaaImage);
-
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memRequirements.size;
-  allocInfo.memoryTypeIndex = m_renderer->device().find_memory_type(
-    memRequirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_hdrMsaaImageMemory = m_renderer->device().device().allocateMemory(allocInfo);
-  m_renderer->device().device().bindImageMemory(m_hdrMsaaImage, m_hdrMsaaImageMemory, 0);
-
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_hdrMsaaImage;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_hdrFormat;
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_hdrMsaaImageView = m_renderer->device().device().createImageView(viewInfo);
-
-  spdlog::trace("Created HDR MSAA color image {}x{} ({}x samples)", extent.width, extent.height,
-    static_cast<int>(m_msaaSamples));
-}
-
 void Application::create_uniform_buffer()
 {
   m_uniform_buffer =
     std::make_unique<UniformBuffer<UniformBufferObject>>(m_renderer->device(), "camera uniform buffer");
   spdlog::trace("Created uniform buffer");
-}
-
-void Application::create_hdr_resources()
-{
-  auto dev = m_renderer->device().device();
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-
-  // Single-sample HDR image (resolve target for MSAA, or direct render target)
-  vk::ImageCreateInfo imageInfo{};
-  imageInfo.imageType = vk::ImageType::e2D;
-  imageInfo.extent.width = extent.width;
-  imageInfo.extent.height = extent.height;
-  imageInfo.extent.depth = 1;
-  imageInfo.mipLevels = 1;
-  imageInfo.arrayLayers = 1;
-  imageInfo.format = m_hdrFormat;
-  imageInfo.tiling = vk::ImageTiling::eOptimal;
-  imageInfo.initialLayout = vk::ImageLayout::eUndefined;
-  imageInfo.usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled
-    | vk::ImageUsageFlagBits::eStorage;
-  imageInfo.samples = vk::SampleCountFlagBits::e1;
-  imageInfo.sharingMode = vk::SharingMode::eExclusive;
-
-  m_hdrImage = dev.createImage(imageInfo);
-
-  vk::MemoryRequirements memReqs = dev.getImageMemoryRequirements(m_hdrImage);
-  vk::MemoryAllocateInfo allocInfo{};
-  allocInfo.allocationSize = memReqs.size;
-  allocInfo.memoryTypeIndex = m_renderer->device().find_memory_type(
-    memReqs.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  m_hdrImageMemory = dev.allocateMemory(allocInfo);
-  dev.bindImageMemory(m_hdrImage, m_hdrImageMemory, 0);
-
-  vk::ImageViewCreateInfo viewInfo{};
-  viewInfo.image = m_hdrImage;
-  viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_hdrFormat;
-  viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-  viewInfo.subresourceRange.baseMipLevel = 0;
-  viewInfo.subresourceRange.levelCount = 1;
-  viewInfo.subresourceRange.baseArrayLayer = 0;
-  viewInfo.subresourceRange.layerCount = 1;
-
-  m_hdrImageView = dev.createImageView(viewInfo);
-
-  // Create sampler for composite pass to sample the HDR image
-  if (!m_hdrSampler)
-  {
-    vk::SamplerCreateInfo samplerInfo{};
-    samplerInfo.magFilter = vk::Filter::eLinear;
-    samplerInfo.minFilter = vk::Filter::eLinear;
-    samplerInfo.addressModeU = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeV = vk::SamplerAddressMode::eClampToEdge;
-    samplerInfo.addressModeW = vk::SamplerAddressMode::eClampToEdge;
-    m_hdrSampler = dev.createSampler(samplerInfo);
-  }
-
-  spdlog::trace("Created HDR image {}x{}", extent.width, extent.height);
-}
-
-void Application::destroy_hdr_resources()
-{
-  auto dev = m_renderer->device().device();
-
-  if (m_hdrImageView)
-  {
-    dev.destroyImageView(m_hdrImageView);
-    m_hdrImageView = VK_NULL_HANDLE;
-  }
-  if (m_hdrImage)
-  {
-    dev.destroyImage(m_hdrImage);
-    m_hdrImage = VK_NULL_HANDLE;
-  }
-  if (m_hdrImageMemory)
-  {
-    dev.freeMemory(m_hdrImageMemory);
-    m_hdrImageMemory = VK_NULL_HANDLE;
-  }
-
-  if (m_hdrMsaaImageView)
-  {
-    dev.destroyImageView(m_hdrMsaaImageView);
-    m_hdrMsaaImageView = VK_NULL_HANDLE;
-  }
-  if (m_hdrMsaaImage)
-  {
-    dev.destroyImage(m_hdrMsaaImage);
-    m_hdrMsaaImage = VK_NULL_HANDLE;
-  }
-  if (m_hdrMsaaImageMemory)
-  {
-    dev.freeMemory(m_hdrMsaaImageMemory);
-    m_hdrMsaaImageMemory = VK_NULL_HANDLE;
-  }
-}
-
-void Application::create_composite_pipeline()
-{
-  auto dev = m_renderer->device().device();
-
-  // Descriptor set layout: single sampler for the HDR buffer
-  vk::DescriptorSetLayoutBinding binding{};
-  binding.binding = 0;
-  binding.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-  binding.descriptorCount = 1;
-  binding.stageFlags = vk::ShaderStageFlagBits::eFragment;
-
-  vk::DescriptorSetLayoutCreateInfo layoutInfo{};
-  layoutInfo.bindingCount = 1;
-  layoutInfo.pBindings = &binding;
-  m_composite_descriptor_layout = dev.createDescriptorSetLayout(layoutInfo);
-
-  // Descriptor pool
-  vk::DescriptorPoolSize poolSize{};
-  poolSize.type = vk::DescriptorType::eCombinedImageSampler;
-  poolSize.descriptorCount = 1;
-
-  vk::DescriptorPoolCreateInfo poolInfo{};
-  poolInfo.maxSets = 1;
-  poolInfo.poolSizeCount = 1;
-  poolInfo.pPoolSizes = &poolSize;
-  m_composite_descriptor_pool = dev.createDescriptorPool(poolInfo);
-
-  // Allocate descriptor set
-  vk::DescriptorSetAllocateInfo allocInfo{};
-  allocInfo.descriptorPool = m_composite_descriptor_pool;
-  allocInfo.descriptorSetCount = 1;
-  allocInfo.pSetLayouts = &m_composite_descriptor_layout;
-  m_composite_descriptor_set = dev.allocateDescriptorSets(allocInfo)[0];
-
-  // Update descriptor with HDR image
-  vk::DescriptorImageInfo imageInfo{};
-  imageInfo.sampler = m_hdrSampler;
-  imageInfo.imageView = m_hdrImageView;
-  imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-
-  vk::WriteDescriptorSet write{};
-  write.dstSet = m_composite_descriptor_set;
-  write.dstBinding = 0;
-  write.descriptorCount = 1;
-  write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-  write.pImageInfo = &imageInfo;
-  dev.updateDescriptorSets(write, {});
-
-  // Pipeline layout: descriptor set + push constants (exposure + tonemapMode)
-  vk::PushConstantRange pcRange{};
-  pcRange.stageFlags = vk::ShaderStageFlagBits::eFragment;
-  pcRange.offset = 0;
-  pcRange.size = 8; // float exposure + int tonemapMode
-
-  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
-  pipelineLayoutInfo.setLayoutCount = 1;
-  pipelineLayoutInfo.pSetLayouts = &m_composite_descriptor_layout;
-  pipelineLayoutInfo.pushConstantRangeCount = 1;
-  pipelineLayoutInfo.pPushConstantRanges = &pcRange;
-  m_composite_pipelineLayout = dev.createPipelineLayout(pipelineLayoutInfo);
-
-  // Create pipeline using existing infrastructure
-  sps::vulkan::GraphicsPipelineInBundle specification{};
-  specification.device = dev;
-  specification.vertexFilepath = SHADER_DIR "fullscreen_quad.spv";
-  specification.fragmentFilepath = SHADER_DIR "composite.spv";
-  specification.swapchainExtent = m_renderer->swapchain().extent();
-  specification.swapchainImageFormat = m_renderer->swapchain().image_format();
-  specification.backfaceCulling = false;
-  specification.existingRenderPass = m_composite_renderpass;
-  specification.existingPipelineLayout = m_composite_pipelineLayout;
-  specification.depthTestEnabled = false;
-  // No MSAA for composite pass
-  specification.msaaSamples = vk::SampleCountFlagBits::e1;
-
-  auto output = sps::vulkan::create_graphics_pipeline(specification, true);
-  m_composite_pipeline = output.pipeline;
-
-  spdlog::info("Created composite pipeline");
-}
-
-void Application::create_composite_framebuffers()
-{
-  auto dev = m_renderer->device().device();
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-  const auto& imageViews = m_renderer->swapchain().image_views();
-
-  m_composite_framebuffers.resize(imageViews.size());
-  for (size_t i = 0; i < imageViews.size(); i++)
-  {
-    vk::ImageView attachments[] = { imageViews[i] };
-
-    vk::FramebufferCreateInfo fbInfo{};
-    fbInfo.renderPass = m_composite_renderpass;
-    fbInfo.attachmentCount = 1;
-    fbInfo.pAttachments = attachments;
-    fbInfo.width = extent.width;
-    fbInfo.height = extent.height;
-    fbInfo.layers = 1;
-
-    m_composite_framebuffers[i] = dev.createFramebuffer(fbInfo);
-  }
 }
 
 void Application::create_blur_resources()
@@ -505,7 +230,7 @@ void Application::create_blur_resources()
   imageInfo.extent.depth = 1;
   imageInfo.mipLevels = 1;
   imageInfo.arrayLayers = 1;
-  imageInfo.format = m_hdrFormat;
+  imageInfo.format = m_renderer->hdr_format();
   imageInfo.tiling = vk::ImageTiling::eOptimal;
   imageInfo.initialLayout = vk::ImageLayout::eUndefined;
   imageInfo.usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
@@ -526,7 +251,7 @@ void Application::create_blur_resources()
   vk::ImageViewCreateInfo viewInfo{};
   viewInfo.image = m_blurPingImage;
   viewInfo.viewType = vk::ImageViewType::e2D;
-  viewInfo.format = m_hdrFormat;
+  viewInfo.format = m_renderer->hdr_format();
   viewInfo.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
   viewInfo.subresourceRange.baseMipLevel = 0;
   viewInfo.subresourceRange.levelCount = 1;
@@ -538,7 +263,7 @@ void Application::create_blur_resources()
   // Transition ping image to General layout using a one-shot command buffer
   {
     vk::CommandBufferAllocateInfo allocCmdInfo{};
-    allocCmdInfo.commandPool = m_commandPool;
+    allocCmdInfo.commandPool = m_renderer->command_pool();
     allocCmdInfo.level = vk::CommandBufferLevel::ePrimary;
     allocCmdInfo.commandBufferCount = 1;
     auto cmd = dev.allocateCommandBuffers(allocCmdInfo)[0];
@@ -568,7 +293,7 @@ void Application::create_blur_resources()
     submitInfo.pCommandBuffers = &cmd;
     m_renderer->device().graphics_queue().submit(submitInfo);
     m_renderer->device().graphics_queue().waitIdle();
-    dev.freeCommandBuffers(m_commandPool, cmd);
+    dev.freeCommandBuffers(m_renderer->command_pool(), cmd);
   }
 
   // Create descriptor set layout (2 storage images + 1 combined image sampler for stencil)
@@ -638,7 +363,7 @@ void Application::create_blur_resources()
 
   // Update H descriptor: binding 0 = HDR (read), binding 1 = ping (write), binding 2 = stencil
   vk::DescriptorImageInfo hdrInfo{};
-  hdrInfo.imageView = m_hdrImageView;
+  hdrInfo.imageView = m_renderer->hdr_image_view();
   hdrInfo.imageLayout = vk::ImageLayout::eGeneral;
 
   vk::DescriptorImageInfo pingInfo{};
@@ -647,7 +372,7 @@ void Application::create_blur_resources()
 
   vk::DescriptorImageInfo stencilInfo{};
   stencilInfo.sampler = m_sss_stencil_sampler;
-  stencilInfo.imageView = m_depthStencil->stencil_view();
+  stencilInfo.imageView = m_renderer->depth_stencil().stencil_view();
   stencilInfo.imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
 
   std::array<vk::WriteDescriptorSet, 6> writes{};
@@ -930,7 +655,7 @@ void Application::build_acceleration_structures()
 
   // Create command buffer for AS building
   vk::CommandBufferAllocateInfo allocInfo{};
-  allocInfo.commandPool = m_commandPool;
+  allocInfo.commandPool = m_renderer->command_pool();
   allocInfo.level = vk::CommandBufferLevel::ePrimary;
   allocInfo.commandBufferCount = 1;
 
@@ -961,7 +686,7 @@ void Application::build_acceleration_structures()
   m_renderer->device().graphics_queue().submit(submitInfo, nullptr);
   m_renderer->device().wait_idle();
 
-  m_renderer->device().device().freeCommandBuffers(m_commandPool, cmd);
+  m_renderer->device().device().freeCommandBuffers(m_renderer->command_pool(), cmd);
 
   spdlog::trace("Built acceleration structures");
 }
@@ -1232,8 +957,7 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.scene_render_pass = m_scene_renderpass;
   ctx.scene_framebuffer = m_scene_framebuffers[imageIndex];
   ctx.pipeline_layout = m_pipelineLayout;
-  ctx.composite_render_pass = m_composite_renderpass;
-  ctx.composite_framebuffer = m_composite_framebuffers[imageIndex];
+  ctx.composite_framebuffer = m_composite_stage->framebuffer(imageIndex);
   ctx.mesh = m_scene_manager->mesh();
   ctx.scene = m_scene_manager->scene();
   ctx.camera = &m_camera;
@@ -1295,41 +1019,20 @@ void Application::recreate_swapchain()
     m_renderer->device().device().destroyFramebuffer(fb);
   m_scene_framebuffers.clear();
 
-  for (auto fb : m_composite_framebuffers)
-    m_renderer->device().device().destroyFramebuffer(fb);
-  m_composite_framebuffers.clear();
+  // Composite framebuffers destroyed by CompositeStage::on_swapchain_resize()
 
-  // 4. Destroy old depth-stencil resources
-  m_depthStencil.reset();
-
-  // 4b. Destroy old blur resources (depends on HDR image views)
+  // 4. Destroy old blur resources (depends on HDR image views)
   destroy_blur_resources();
 
-  // 4c. Destroy old HDR resources (includes MSAA)
-  destroy_hdr_resources();
-
-  // 5. Recreate semaphores (old ones may still be referenced by old swapchain presentation)
-  m_renderFinished.clear();
-
-  // 6. Recreate swapchain (handles its own image views internally)
+  // 5. Recreate swapchain (handles its own image views internally)
   m_renderer->swapchain().recreate(width, height);
 
-  // 7. Recreate per-swapchain-image semaphores
-  m_renderFinished.resize(m_renderer->swapchain().image_count());
-  for (std::uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
-  {
-    m_renderFinished[i] = std::make_unique<Semaphore>(m_renderer->device(), "render-finished-" + std::to_string(i));
-  }
+  // 6. Recreate per-swapchain-image semaphores
+  m_renderer->recreate_sync_objects();
 
-  // 8. Recreate depth resources for new size
-  create_depth_resources();
-
-  // 8a. Recreate HDR resources
-  create_hdr_resources();
-  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
-  {
-    create_msaa_color_resources();
-  }
+  // 7. Recreate renderer-owned resources (depth-stencil, HDR, MSAA)
+  m_renderer->recreate_depth_resources();
+  m_renderer->recreate_hdr_resources();
 
   // 8b. Recreate RT storage image if RT is enabled
   if (m_rt_image)
@@ -1364,15 +1067,15 @@ void Application::recreate_swapchain()
     for (uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
     {
       std::vector<vk::ImageView> attachments;
-      if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+      if (m_renderer->msaa_samples() != vk::SampleCountFlagBits::e1)
       {
         // MSAA: [hdrMsaa, depth, hdrResolve]
-        attachments = { m_hdrMsaaImageView, m_depthStencil->combined_view(), m_hdrImageView };
+        attachments = { m_renderer->hdr_msaa_image_view(), m_renderer->depth_stencil().combined_view(), m_renderer->hdr_image_view() };
       }
       else
       {
         // No MSAA: [hdr, depth]
-        attachments = { m_hdrImageView, m_depthStencil->combined_view() };
+        attachments = { m_renderer->hdr_image_view(), m_renderer->depth_stencil().combined_view() };
       }
       vk::FramebufferCreateInfo fbInfo{};
       fbInfo.renderPass = m_scene_renderpass;
@@ -1385,31 +1088,14 @@ void Application::recreate_swapchain()
     }
   }
 
-  // 9b. Create new composite framebuffers
-  create_composite_framebuffers();
-
-  // 9c. Update composite descriptor set with new HDR image view
-  {
-    vk::DescriptorImageInfo imageInfo{};
-    imageInfo.sampler = m_hdrSampler;
-    imageInfo.imageView = m_hdrImageView;
-    imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-
-    vk::WriteDescriptorSet write{};
-    write.dstSet = m_composite_descriptor_set;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = vk::DescriptorType::eCombinedImageSampler;
-    write.pImageInfo = &imageInfo;
-    m_renderer->device().device().updateDescriptorSets(write, {});
-  }
+  // Composite framebuffers + descriptor handled by CompositeStage::on_swapchain_resize()
 
   // 9d. Recreate blur resources (needs HDR image + depth-stencil + command pool)
   create_blur_resources();
   if (m_sss_blur_stage)
   {
     m_sss_blur_stage->set_descriptors(m_sss_blur_h_descriptor, m_sss_blur_v_descriptor);
-    m_sss_blur_stage->set_depth_stencil_image(m_depthStencil->image());
+    m_sss_blur_stage->set_depth_stencil_image(m_renderer->depth_stencil().image());
   }
 
   // Update camera aspect ratio
@@ -1432,7 +1118,7 @@ void Application::recreate_swapchain()
 void Application::render()
 {
   // Wait for previous frame to complete
-  m_inFlight->block();
+  m_renderer->in_flight().block();
 
   // Acquire next image
   uint32_t imageIndex;
@@ -1440,7 +1126,7 @@ void Application::render()
   {
     imageIndex = m_renderer->device().device()
                    .acquireNextImageKHR(
-                     *m_renderer->swapchain().swapchain(), UINT64_MAX, *m_imageAvailable->semaphore(), nullptr)
+                     *m_renderer->swapchain().swapchain(), UINT64_MAX, *m_renderer->image_available().semaphore(), nullptr)
                    .value;
   }
   catch (const vk::OutOfDateKHRError&)
@@ -1452,14 +1138,14 @@ void Application::render()
   }
 
   // Reset fence only after successful acquire, before submit
-  m_inFlight->reset();
+  m_renderer->in_flight().reset();
 
-  vk::CommandBuffer commandBuffer = m_commandBuffers[imageIndex];
+  vk::CommandBuffer commandBuffer = m_renderer->command_buffers()[imageIndex];
   commandBuffer.reset();
   record_draw_commands(commandBuffer, imageIndex);
 
   vk::SubmitInfo submitInfo = {};
-  vk::Semaphore waitSemaphores[] = { *m_imageAvailable->semaphore() };
+  vk::Semaphore waitSemaphores[] = { *m_renderer->image_available().semaphore() };
   vk::PipelineStageFlags waitStages[] = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
   submitInfo.waitSemaphoreCount = 1;
   submitInfo.pWaitSemaphores = waitSemaphores;
@@ -1467,11 +1153,11 @@ void Application::render()
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &commandBuffer;
 
-  vk::Semaphore signalSemaphores[] = { *m_renderFinished[imageIndex]->semaphore() };
+  vk::Semaphore signalSemaphores[] = { *m_renderer->render_finished(imageIndex).semaphore() };
   submitInfo.signalSemaphoreCount = 1;
   submitInfo.pSignalSemaphores = signalSemaphores;
 
-  m_renderer->device().graphics_queue().submit(submitInfo, m_inFlight->get());
+  m_renderer->device().graphics_queue().submit(submitInfo, m_renderer->in_flight().get());
 
   // Present
   vk::PresentInfoKHR presentInfo = {};
@@ -1513,14 +1199,14 @@ void Application::make_pipeline(
 
   // Create scene render pass (HDR target)
   m_scene_renderpass = sps::vulkan::make_scene_renderpass(
-    m_renderer->device().device(), m_hdrFormat, m_depthFormat, true, m_msaaSamples);
+    m_renderer->device().device(), m_renderer->hdr_format(), m_renderer->depth_format(), true, m_renderer->msaa_samples());
 
   sps::vulkan::GraphicsPipelineInBundle specification = {};
   specification.device = m_renderer->device().device();
   specification.vertexFilepath = vertex_shader;
   specification.fragmentFilepath = fragment_shader;
   specification.swapchainExtent = m_renderer->swapchain().extent();
-  specification.swapchainImageFormat = m_hdrFormat; // HDR target format
+  specification.swapchainImageFormat = m_renderer->hdr_format(); // HDR target format
   specification.descriptorSetLayout = m_scene_manager->default_descriptor()->layout();
 
   // Set vertex input format
@@ -1535,10 +1221,10 @@ void Application::make_pipeline(
 
   // Depth testing
   specification.depthTestEnabled = m_depthTestEnabled;
-  specification.depthFormat = m_depthFormat;
+  specification.depthFormat = m_renderer->depth_format();
 
   // MSAA
-  specification.msaaSamples = m_msaaSamples;
+  specification.msaaSamples = m_renderer->msaa_samples();
 
   // Use the scene render pass
   specification.existingRenderPass = m_scene_renderpass;
@@ -1686,23 +1372,7 @@ void Application::reload_shaders(
 
 bool Application::save_screenshot(const std::string& filepath)
 {
-  m_renderer->device().wait_idle();
-
-  // Get current swapchain image
-  auto images = m_renderer->swapchain().images();
-  if (images.empty())
-  {
-    spdlog::error("No swapchain images available for screenshot");
-    return false;
-  }
-
-  // Use the first swapchain image (most recently presented)
-  vk::Image source_image = images[0];
-  vk::Format format = m_renderer->swapchain().image_format();
-  vk::Extent2D extent = m_renderer->swapchain().extent();
-
-  return sps::vulkan::save_screenshot(
-    m_renderer->device(), m_commandPool, source_image, format, extent, filepath);
+  return m_renderer->save_screenshot(filepath);
 }
 
 bool Application::save_screenshot()
@@ -2072,15 +1742,9 @@ Application::~Application()
 
   m_renderer->device().wait_idle();
 
-  m_inFlight.reset(nullptr);
-  m_imageAvailable.reset(nullptr);
-  m_renderFinished.clear();
-
   // Destroy resources before device
   m_scene_manager.reset();
   m_uniform_buffer.reset();
-
-  m_renderer->device().device().destroyCommandPool(m_commandPool);
 
   // Destroy scene pipelines
   m_renderer->device().device().destroyPipeline(m_pipeline);
@@ -2092,28 +1756,14 @@ Application::~Application()
   m_renderer->device().device().destroyPipeline(m_debug_2d_pipeline);
   m_renderer->device().device().destroyPipelineLayout(m_debug_2d_pipelineLayout);
 
-  // Destroy composite pipeline
-  m_renderer->device().device().destroyPipeline(m_composite_pipeline);
-  m_renderer->device().device().destroyPipelineLayout(m_composite_pipelineLayout);
+  // Composite pipeline, descriptors, framebuffers destroyed by CompositeStage (via RenderGraph)
   m_renderer->device().device().destroyRenderPass(m_composite_renderpass);
-  if (m_composite_descriptor_pool)
-    m_renderer->device().device().destroyDescriptorPool(m_composite_descriptor_pool);
-  if (m_composite_descriptor_layout)
-    m_renderer->device().device().destroyDescriptorSetLayout(m_composite_descriptor_layout);
 
   // Destroy framebuffers
   for (auto fb : m_scene_framebuffers)
     m_renderer->device().device().destroyFramebuffer(fb);
-  for (auto fb : m_composite_framebuffers)
-    m_renderer->device().device().destroyFramebuffer(fb);
 
-  // Destroy depth-stencil resources
-  m_depthStencil.reset();
-
-  // Destroy HDR resources (includes MSAA)
-  destroy_hdr_resources();
-  if (m_hdrSampler)
-    m_renderer->device().device().destroySampler(m_hdrSampler);
+  // Depth-stencil, HDR, MSAA destroyed by renderer
 
   // Destroy SSS blur resources
   destroy_blur_resources();
@@ -2152,13 +1802,6 @@ Application::~Application()
 
 void Application::finalize_setup()
 {
-  // Create HDR offscreen resources
-  create_hdr_resources();
-  if (m_msaaSamples != vk::SampleCountFlagBits::e1)
-  {
-    create_msaa_color_resources();
-  }
-
   // Create scene framebuffers (HDR target)
   {
     vk::Extent2D extent = m_renderer->swapchain().extent();
@@ -2166,13 +1809,13 @@ void Application::finalize_setup()
     for (uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
     {
       std::vector<vk::ImageView> attachments;
-      if (m_msaaSamples != vk::SampleCountFlagBits::e1)
+      if (m_renderer->msaa_samples() != vk::SampleCountFlagBits::e1)
       {
-        attachments = { m_hdrMsaaImageView, m_depthStencil->combined_view(), m_hdrImageView };
+        attachments = { m_renderer->hdr_msaa_image_view(), m_renderer->depth_stencil().combined_view(), m_renderer->hdr_image_view() };
       }
       else
       {
-        attachments = { m_hdrImageView, m_depthStencil->combined_view() };
+        attachments = { m_renderer->hdr_image_view(), m_renderer->depth_stencil().combined_view() };
       }
       vk::FramebufferCreateInfo fbInfo{};
       fbInfo.renderPass = m_scene_renderpass;
@@ -2185,26 +1828,10 @@ void Application::finalize_setup()
     }
   }
 
-  // Create composite render pass and framebuffers
+  // Create composite render pass and register with graph
   m_composite_renderpass = sps::vulkan::make_composite_renderpass(
     m_renderer->device().device(), m_renderer->swapchain().image_format(), true);
-  create_composite_framebuffers();
-
-  // Create composite pipeline (tone mapping + gamma)
-  create_composite_pipeline();
-
-  m_commandPool = sps::vulkan::make_command_pool(m_renderer->device(), m_debugMode);
-
-  m_mainCommandBuffer = sps::vulkan::make_command_buffers(
-    m_renderer->device(), m_renderer->swapchain(), m_commandPool, m_commandBuffers, true);
-
-  m_inFlight = std::make_unique<Fence>(m_renderer->device(), "in-flight", true);
-  m_imageAvailable = std::make_unique<Semaphore>(m_renderer->device(), "image-available");
-  m_renderFinished.resize(m_renderer->swapchain().image_count());
-  for (std::uint32_t i = 0; i < m_renderer->swapchain().image_count(); i++)
-  {
-    m_renderFinished[i] = std::make_unique<Semaphore>(m_renderer->device(), "render-finished-" + std::to_string(i));
-  }
+  m_render_graph.set_render_pass(Phase::CompositePass, m_composite_renderpass);
 
   // Create SSS blur resources (needs command pool for one-shot layout transition)
   create_blur_resources();
@@ -2237,10 +1864,9 @@ void Application::finalize_setup()
     &m_use_sss_blur, &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b,
     m_sss_blur_pipeline, m_sss_blur_pipelineLayout,
     m_sss_blur_h_descriptor, m_sss_blur_v_descriptor,
-    &m_hdrImage, m_depthStencil->image(), &m_blur_extent);
+    m_renderer->hdr_image_ptr(), m_renderer->depth_stencil().image(), &m_blur_extent);
   m_composite_stage = m_render_graph.add<CompositeStage>(
-    m_composite_pipeline, m_composite_pipelineLayout,
-    m_composite_descriptor_set, &m_exposure, &m_tonemap_mode);
+    *m_renderer, m_composite_renderpass, &m_exposure, &m_tonemap_mode);
   m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
     &m_debug_2d_mode, &m_debug_material_index, m_debug_2d_pipeline, m_debug_2d_pipelineLayout);
   m_ui_stage = m_render_graph.add<UIStage>(&m_ui_render_callback);

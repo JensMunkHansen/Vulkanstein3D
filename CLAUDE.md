@@ -49,22 +49,33 @@ Scene renders to `m_hdrImage` (R16G16B16A16Sfloat). Composite samples it and wri
 Fragment shader outputs raw linear HDR; `composite.frag` does exposure + tone mapping + gamma.
 
 Stages registered in `finalize_setup()`, no-ops via `is_enabled()` + early returns.
-`FrameContext` passes per-frame data — stages don't own Vulkan resources.
+`FrameContext` passes per-frame data. `CompositeStage` is self-contained (owns pipeline, descriptors, framebuffers). Other stages still receive non-owning handles from app.
+
+### Resource ownership
+
+| Resource | Owner | Consumers |
+|----------|-------|-----------|
+| Shared images (HDR, depth-stencil, MSAA) | `VulkanRenderer` | Stages via renderer getters |
+| Render passes | App creates, graph brokers | Graph uses for begin/end; stages use for pipeline/framebuffer creation |
+| Pipeline, descriptors, framebuffers | Self-contained stages (CompositeStage) or app (others, migrating) | The stage itself |
 
 ### Future Improvements
 
-#### Near-term: Resource-aware graph
-The graph is currently a phase-ordered stage list with manual barriers. A middle ground before a full render graph:
+#### Near-term: Shared image registry in graph
+Graph brokers shared images (HDR, DS, ping) so stages query the graph instead of receiving raw `vk::Image` handles at construction. Avoids stale handles during swapchain recreation.
 
-1. **Shared resource registry**: Graph holds references to shared images (HDR, DS, ping) instead of stages receiving raw `vk::Image` handles at construction. Stages query the graph for resources. This avoids stale handles during swapchain recreation.
-2. **Resource declarations**: Each stage declares what it reads/writes at registration time (e.g., `SSSBlurStage` reads HDR + DS stencil, writes ping). Graph validates declarations and can warn about missing barriers, but doesn't auto-generate them yet.
-3. **DepthStencilAttachment as graph resource**: The DS attachment is a shared resource used by scene pass (write depth+stencil), blur stage (read stencil), and implicitly by the next frame. The graph should know about it so swapchain recreation can update all dependents automatically.
+#### Near-term: More self-contained stages
+Migrate remaining stages to own their pipelines/descriptors following CompositeStage pattern:
+- `Debug2DStage` — similar to CompositeStage, straightforward
+- `SSSBlurStage` — compute pipeline + ping image + descriptors
+- `RasterOpaqueStage` / `RasterBlendStage` — share a pipeline layout, need coordinated approach
+- `RayTracingStage` — owns storage image, descriptor, acceleration structures, pipeline
 
-#### Medium-term: Stages own their resources
-- Stages could own their pipeline creation (currently in `app.cpp`)
-- RT stage could own its resources (storage image, descriptor, acceleration structures)
-- Each stage creates/destroys its own pipeline, descriptors, and intermediate images
-- `app.cpp` becomes a thin shell: window, device, swapchain, graph setup
+#### Medium-term: Dynamic rendering (VK_KHR_dynamic_rendering)
+- Eliminates `VkRenderPass` and `VkFramebuffer` — attachments specified inline with `vkCmdBeginRendering`
+- Core in Vulkan 1.3; removes need for render pass registry
+- Graph specifies attachment formats per phase, stages don't need render pass handles
+- Simplifies swapchain recreation (no framebuffer rebuild)
 
 #### Long-term: Full render graph
 - Declarative resource creation (logical → physical during `compile()`)
@@ -167,8 +178,10 @@ Move `create_rt_storage_image()`, `create_rt_descriptor()`, `create_rt_pipeline(
 ### 4. Screenshot System → `ScreenshotManager` (~80 lines)
 `save_screenshot()`, `begin_screenshot_all()`, `tick_screenshot_all()` — self-contained state machine with its own member variables.
 
-### 5. Pipeline Creation → Render Graph Stages (~120 lines)
-`make_pipeline()`, `create_debug_2d_pipeline()`, `create_light_indicator()` — each stage could own its pipeline creation.
+### 5. ~~Pipeline Creation → Render Graph Stages~~ (PARTIAL)
+~~`create_composite_pipeline()`~~ — done: `CompositeStage` is self-contained (owns pipeline, descriptors, framebuffers).
+Remaining: `make_pipeline()`, `create_debug_2d_pipeline()`, `create_light_indicator()`.
 
-### 6. Vulkan Resource Creation → `FrameResources` (~150 lines)
-`create_depth_resources()`, `create_msaa_color_resources()`, `create_uniform_buffer()` — swapchain-dependent resources, natural fit for a dedicated class or moving into `recreate_swapchain()`.
+### 6. ~~Vulkan Resource Creation → `VulkanRenderer`~~ (DONE)
+~~`create_depth_resources()`, `create_msaa_color_resources()`, `create_hdr_resources()`~~ — moved to `VulkanRenderer`.
+Remaining: `create_uniform_buffer()` (app-specific, stays in app).

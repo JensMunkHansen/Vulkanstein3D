@@ -8,7 +8,6 @@
 
 #include <sps/vulkan/acceleration_structure.h>
 #include <sps/vulkan/app_config.h>
-#include <sps/vulkan/depth_stencil_attachment.h>
 #include <sps/vulkan/camera.h>
 #include <sps/vulkan/command_registry.h>
 #include <sps/vulkan/descriptor_builder.h>
@@ -27,8 +26,6 @@
 
 namespace sps::vulkan
 {
-class Fence;
-class Semaphore;
 class CommandRegistry;
 class CompositeStage;
 class Debug2DStage;
@@ -96,7 +93,7 @@ public:
   [[nodiscard]] uint32_t graphics_queue_family() const;
   [[nodiscard]] VkRenderPass vk_renderpass() const { return m_composite_renderpass; }
   [[nodiscard]] VkSampleCountFlagBits msaa_samples() const { return VK_SAMPLE_COUNT_1_BIT; }
-  [[nodiscard]] VkCommandPool vk_command_pool() const { return m_commandPool; }
+  [[nodiscard]] VkCommandPool vk_command_pool() const { return m_renderer->command_pool(); }
   [[nodiscard]] uint32_t swapchain_image_count() const;
   [[nodiscard]] GLFWwindow* glfw_window() const;
   [[nodiscard]] bool should_close() const;
@@ -198,13 +195,7 @@ public:
 
 private:
   void setup_camera();
-  void create_depth_resources();
-  void create_msaa_color_resources();
   void create_uniform_buffer();
-  void create_hdr_resources();
-  void create_composite_pipeline();
-  void create_composite_framebuffers();
-  void destroy_hdr_resources();
   void create_blur_resources();
   void destroy_blur_resources();
   void create_debug_2d_pipeline();
@@ -226,7 +217,6 @@ private:
   bool m_debugMode = true;
   bool m_backfaceCulling = true;
   bool m_depthTestEnabled = true;
-  vk::Format m_depthFormat = vk::Format::eD32SfloatS8Uint;
   double m_lastTime, m_currentTime;
   int m_numFrames;
   float m_frameTime;
@@ -238,26 +228,8 @@ private:
   vk::Pipeline m_pipeline;
   vk::Pipeline m_blend_pipeline; // blend on, depth write off
 
-  // HDR offscreen target (single-sample, for composite sampling)
-  static constexpr vk::Format m_hdrFormat = vk::Format::eR16G16B16A16Sfloat;
-  vk::Image m_hdrImage{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_hdrImageMemory{ VK_NULL_HANDLE };
-  vk::ImageView m_hdrImageView{ VK_NULL_HANDLE };
-  vk::Sampler m_hdrSampler{ VK_NULL_HANDLE };
-
-  // HDR MSAA color target (multi-sample, resolves to m_hdrImage)
-  vk::Image m_hdrMsaaImage{ VK_NULL_HANDLE };
-  vk::DeviceMemory m_hdrMsaaImageMemory{ VK_NULL_HANDLE };
-  vk::ImageView m_hdrMsaaImageView{ VK_NULL_HANDLE };
-
-  // Composite render pass (swapchain target)
+  // Composite render pass (swapchain target — shared via RenderGraph registry)
   vk::RenderPass m_composite_renderpass;
-  std::vector<vk::Framebuffer> m_composite_framebuffers;
-  vk::Pipeline m_composite_pipeline;
-  vk::PipelineLayout m_composite_pipelineLayout;
-  vk::DescriptorPool m_composite_descriptor_pool{ VK_NULL_HANDLE };
-  vk::DescriptorSetLayout m_composite_descriptor_layout{ VK_NULL_HANDLE };
-  vk::DescriptorSet m_composite_descriptor_set{ VK_NULL_HANDLE };
 
   // SSS blur (compute, separable H+V)
   vk::Image m_blurPingImage{ VK_NULL_HANDLE };
@@ -283,19 +255,6 @@ private:
   // 2D debug pipeline (fullscreen quad)
   vk::Pipeline m_debug_2d_pipeline;
   vk::PipelineLayout m_debug_2d_pipelineLayout;
-
-  // MSAA
-  vk::SampleCountFlagBits m_msaaSamples{ vk::SampleCountFlagBits::e1 };
-
-  // Depth-stencil buffer (RAII — owns image, memory, and aspect views)
-  std::unique_ptr<DepthStencilAttachment> m_depthStencil;
-  vk::CommandPool m_commandPool;
-  vk::CommandBuffer m_mainCommandBuffer;
-  std::vector<vk::CommandBuffer> m_commandBuffers{};
-
-  std::unique_ptr<Semaphore> m_imageAvailable;
-  std::vector<std::unique_ptr<Semaphore>> m_renderFinished;
-  std::unique_ptr<Fence> m_inFlight;
 
   // Camera
   Camera m_camera;
