@@ -51,6 +51,8 @@ Fragment shader outputs raw linear HDR; `composite.frag` does exposure + tone ma
 Stages registered in `finalize_setup()`, no-ops via `is_enabled()` + early returns.
 `FrameContext` passes per-frame data. `CompositeStage` is self-contained (owns pipeline, descriptors, framebuffers). Other stages still receive non-owning handles from app.
 
+As stages become self-contained, `FrameContext` shrinks. Self-contained stages ignore most of it (CompositeStage only reads `command_buffer` and `extent`). The end state: FrameContext carries only `command_buffer`, `image_index`, `extent`, and shared scene data (camera, mesh, lights). Pipelines, descriptors, and framebuffers are stage-internal.
+
 ### Resource ownership
 
 | Resource | Owner | Consumers |
@@ -70,6 +72,9 @@ Migrate remaining stages to own their pipelines/descriptors following CompositeS
 - `SSSBlurStage` — compute pipeline + ping image + descriptors
 - `RasterOpaqueStage` / `RasterBlendStage` — share a pipeline layout, need coordinated approach
 - `RayTracingStage` — owns storage image, descriptor, acceleration structures, pipeline
+
+#### Medium-term: Multiple frames in flight
+Currently single-fence (one frame at a time). With self-contained stages, multiple frames in flight becomes a local decision per stage rather than a global one managed by the app. The graph provides a `frame_index` (0..N-1), and each stage indexes into its own ring of per-frame resources. Read-only resources (pipeline, sampler, render pass) stay shared; write-per-frame resources (descriptor sets, framebuffers) get indexed. The stage is the right granularity for knowing what needs duplication — the app shouldn't have to know that CompositeStage needs N descriptor sets but SSSBlurStage needs N ping images.
 
 #### Medium-term: Dynamic rendering (VK_KHR_dynamic_rendering)
 - Eliminates `VkRenderPass` and `VkFramebuffer` — attachments specified inline with `vkCmdBeginRendering`
