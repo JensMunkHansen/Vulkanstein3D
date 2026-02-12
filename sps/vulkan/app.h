@@ -9,7 +9,6 @@
 #include <sps/vulkan/app_config.h>
 #include <sps/vulkan/camera.h>
 #include <sps/vulkan/command_registry.h>
-#include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/light.h>
 #include <sps/vulkan/mesh.h>
@@ -231,7 +230,7 @@ private:
   // Camera
   Camera m_camera;
 
-  // Scene manager (owns mesh, scene, textures, IBL, descriptors)
+  // Scene manager (owns mesh, scene, textures, IBL)
   std::unique_ptr<SceneManager> m_scene_manager;
 
   // Light indicator (procedural sphere for visualizing point light position)

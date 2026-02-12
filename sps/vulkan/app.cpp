@@ -145,12 +145,8 @@ Application::Application(int argc, char** argv)
   m_scene_manager->create_defaults(m_hdr_file);
   auto load_result = m_scene_manager->load_initial_scene(m_geometry_source, m_gltf_file, m_ply_file);
 
-  // Create uniform buffer and descriptor
+  // Create uniform buffer (descriptors allocated by graph in finalize_setup)
   create_uniform_buffer();
-
-  m_scene_manager->create_descriptors(m_uniform_buffer->buffer());
-
-  // Descriptor transfer happens in finalize_setup after graph is ready
 
   // Create scene render pass (pipelines created by RasterOpaqueStage in finalize_setup)
   create_scene_renderpass();
@@ -999,13 +995,15 @@ void Application::load_model(int index)
     return;
 
   m_renderer->device().wait_idle();
-  auto result = m_scene_manager->load_model(m_gltf_models[index], m_uniform_buffer->buffer());
+  auto result = m_scene_manager->load_model(m_gltf_models[index]);
   if (!result.success)
     return;
 
-  // Transfer new descriptors to graph
-  m_render_graph.set_default_descriptor(m_scene_manager->take_default_descriptor());
-  m_render_graph.set_material_descriptors(m_scene_manager->take_material_descriptors());
+  // Reallocate material descriptors in graph for new materials
+  m_render_graph.allocate_material_descriptors(
+    m_scene_manager->default_texture_set(),
+    m_scene_manager->material_texture_sets(),
+    { m_uniform_buffer->descriptor_info() });
 
   // Camera + light reset
   if (result.bounds.valid())
@@ -1041,11 +1039,13 @@ void Application::load_hdr(int index)
     return;
 
   m_renderer->device().wait_idle();
-  m_scene_manager->load_hdr(m_hdr_files[index], m_uniform_buffer->buffer());
+  m_scene_manager->load_hdr(m_hdr_files[index]);
 
-  // Transfer rebuilt descriptors to graph (IBL textures changed)
-  m_render_graph.set_default_descriptor(m_scene_manager->take_default_descriptor());
-  m_render_graph.set_material_descriptors(m_scene_manager->take_material_descriptors());
+  // Reallocate material descriptors in graph (IBL textures changed)
+  m_render_graph.allocate_material_descriptors(
+    m_scene_manager->default_texture_set(),
+    m_scene_manager->material_texture_sets(),
+    { m_uniform_buffer->descriptor_info() });
 
   m_current_hdr_index = index;
 
@@ -1173,9 +1173,11 @@ void Application::finalize_setup()
     &m_debug_2d_mode, &m_debug_material_index);
   m_ui_stage = m_render_graph.add<UIStage>(&m_ui_render_callback);
 
-  // Transfer descriptor ownership from SceneManager to graph
-  m_render_graph.set_default_descriptor(m_scene_manager->take_default_descriptor());
-  m_render_graph.set_material_descriptors(m_scene_manager->take_material_descriptors());
+  // Allocate material descriptors in graph (graph owns the pool and sets)
+  m_render_graph.allocate_material_descriptors(
+    m_scene_manager->default_texture_set(),
+    m_scene_manager->material_texture_sets(),
+    { m_uniform_buffer->descriptor_info() });
 }
 
 VkInstance Application::vk_instance() const

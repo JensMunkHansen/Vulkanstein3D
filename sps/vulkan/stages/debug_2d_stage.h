@@ -6,7 +6,6 @@ namespace sps::vulkan
 {
 
 class RenderGraph;
-class ResourceDescriptor;
 class VulkanRenderer;
 
 /// Fullscreen texture viewer for 2D debug mode.

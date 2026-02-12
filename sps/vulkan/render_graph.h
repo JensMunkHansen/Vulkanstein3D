@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sps/vulkan/material_texture_set.h>
 #include <sps/vulkan/render_stage.h>
 #include <sps/vulkan/shared_image_registry.h>
 
@@ -12,7 +13,6 @@ namespace sps::vulkan
 
 class CompositeStage;
 class Device;
-class ResourceDescriptor;
 class VulkanRenderer;
 
 /// Fixed-order render graph.
@@ -23,6 +23,14 @@ class VulkanRenderer;
 ///   2. ScenePass — inside scene render pass (HDR target)
 ///   3. Intermediate — between render passes (e.g. compute blur)
 ///   4. CompositePass — inside composite render pass (swapchain target)
+///
+/// ## Material descriptor sets
+///
+/// The graph owns a material descriptor pool and allocates descriptor sets
+/// for each material. SceneManager provides texture handles (view + sampler
+/// pairs via MaterialTextureSet), and the graph creates and writes the
+/// descriptor sets. The API is frame-indexed from day one for future N>1
+/// frames in flight support.
 ///
 /// ## Scene framebuffers
 ///
@@ -102,13 +110,30 @@ public:
   /// The graph-owned material descriptor set layout (stable, never recreated).
   [[nodiscard]] vk::DescriptorSetLayout material_descriptor_layout() const;
 
-  /// Transfer descriptor ownership from SceneManager to the graph.
-  void set_default_descriptor(std::unique_ptr<ResourceDescriptor> desc);
-  void set_material_descriptors(std::vector<std::unique_ptr<ResourceDescriptor>> descs);
+  /// Allocate and write material descriptor sets from the graph-owned pool.
+  ///
+  /// Destroys any previous pool and sets, then creates a new pool with
+  /// enough capacity for (1 + material_count) * frames_in_flight sets.
+  /// Each set is written with the UBO buffer info for its frame and the
+  /// texture bindings from the corresponding MaterialTextureSet.
+  ///
+  /// @param default_textures  Texture bindings for the default (non-scene) path.
+  /// @param material_textures Per-material texture bindings.
+  /// @param ubo_infos         One UBO descriptor buffer info per frame in flight.
+  void allocate_material_descriptors(
+    const MaterialTextureSet& default_textures,
+    const std::vector<MaterialTextureSet>& material_textures,
+    const std::vector<vk::DescriptorBufferInfo>& ubo_infos);
 
-  /// Graph-owned descriptor accessors (used by stages that need material descriptors).
-  [[nodiscard]] const ResourceDescriptor* default_descriptor() const;
-  [[nodiscard]] const std::vector<std::unique_ptr<ResourceDescriptor>>& material_descriptors() const;
+  /// Get the default descriptor set for a given frame index.
+  [[nodiscard]] vk::DescriptorSet default_descriptor_set(uint32_t frame_index) const;
+
+  /// Get a material descriptor set for a given frame index and material index.
+  [[nodiscard]] vk::DescriptorSet material_descriptor_set(
+    uint32_t frame_index, uint32_t material_index) const;
+
+  /// Number of material descriptor sets (per frame). 0 when no scene is loaded.
+  [[nodiscard]] uint32_t material_set_count() const;
 
   /// Register the composite stage so the graph can query its framebuffer.
   void set_composite_stage(const CompositeStage* stage);
@@ -121,14 +146,22 @@ private:
   const VulkanRenderer* m_renderer{ nullptr };
   const CompositeStage* m_composite_stage{ nullptr };
   vk::DescriptorSetLayout m_material_layout{ VK_NULL_HANDLE };
-  std::unique_ptr<ResourceDescriptor> m_default_descriptor;
-  std::vector<std::unique_ptr<ResourceDescriptor>> m_material_descriptors;
+  uint32_t m_frames_in_flight{ 1 };
+  vk::DescriptorPool m_material_pool{ VK_NULL_HANDLE };
+  std::vector<vk::DescriptorSet> m_default_sets;                // [frame_index]
+  std::vector<std::vector<vk::DescriptorSet>> m_material_sets;  // [frame_index][material_index]
   std::vector<std::unique_ptr<RenderStage>> m_stages;
   std::array<vk::RenderPass, 4> m_render_passes{};
   std::vector<vk::Framebuffer> m_scene_framebuffers;
   SharedImageRegistry m_image_registry;
 
   void destroy_scene_framebuffers();
+  void destroy_material_pool();
+
+  /// Write one descriptor set with a UBO and 11 texture bindings.
+  void write_material_set(vk::DescriptorSet set,
+    const vk::DescriptorBufferInfo& ubo_info,
+    const MaterialTextureSet& textures);
 };
 
 } // namespace sps::vulkan

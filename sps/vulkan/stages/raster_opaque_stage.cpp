@@ -2,7 +2,6 @@
 
 #include <spdlog/spdlog.h>
 #include <sps/vulkan/debug_constants.h>
-#include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/mesh.h>
 #include <sps/vulkan/pipeline.h>
@@ -149,9 +148,7 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
 
   ctx.mesh->bind(ctx.command_buffer);
 
-  const auto& mat_descs = m_graph.material_descriptors();
-
-  if (ctx.scene && !ctx.scene->primitives.empty() && !mat_descs.empty())
+  if (ctx.scene && !ctx.scene->primitives.empty() && m_graph.material_set_count() > 0)
   {
     // Multi-material scene: draw OPAQUE + MASK primitives
     ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
@@ -195,11 +192,11 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
         static_cast<uint32_t>(sizeof(pc)), &pc);
       ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout,
-        0, mat_descs[prim.materialIndex]->descriptor_set(), {});
+        0, m_graph.material_descriptor_set(ctx.frame_index, prim.materialIndex), {});
       ctx.command_buffer.drawIndexed(prim.indexCount, 1, prim.firstIndex, prim.vertexOffset, 0);
     }
   }
-  else if (m_graph.default_descriptor())
+  else
   {
     // Legacy single-draw path: opaque defaults
     ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
@@ -217,7 +214,7 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
       static_cast<uint32_t>(sizeof(pc)), &pc);
     ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout, 0,
-      m_graph.default_descriptor()->descriptor_set(), {});
+      m_graph.default_descriptor_set(ctx.frame_index), {});
     ctx.mesh->draw(ctx.command_buffer);
   }
 }

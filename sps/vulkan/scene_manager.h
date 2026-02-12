@@ -2,6 +2,7 @@
 
 #include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/ibl.h>
+#include <sps/vulkan/material_texture_set.h>
 
 #include <memory>
 #include <optional>
@@ -16,13 +17,14 @@ namespace sps::vulkan
 class Device;
 class IBL;
 class Mesh;
-class ResourceDescriptor;
 class Texture;
 
-/// @brief Owns scene assets: mesh, materials, textures, IBL, and descriptors.
+/// @brief Owns scene assets: mesh, materials, textures, and IBL.
 ///
 /// Extracted from Application to reduce god-object complexity.
-/// Application delegates scene loading and descriptor creation here.
+/// Application delegates scene loading here. Descriptor creation is
+/// handled by the RenderGraph; SceneManager provides texture handles
+/// via default_texture_set() and material_texture_sets().
 class SceneManager
 {
 public:
@@ -49,25 +51,24 @@ public:
   LoadResult load_initial_scene(const std::string& geometry_source,
     const std::string& gltf_file, const std::string& ply_file);
 
-  /// Build/rebuild descriptors (needs UBO buffer handle for binding 0).
-  void create_descriptors(vk::Buffer uniform_buffer);
-
   /// Runtime model switch. Caller must call device.wait_idle() first.
-  LoadResult load_model(const std::string& path, vk::Buffer uniform_buffer);
+  LoadResult load_model(const std::string& path);
 
   /// Switch HDR environment. Caller must call device.wait_idle() first.
-  void load_hdr(const std::string& hdr_file, vk::Buffer uniform_buffer);
+  void load_hdr(const std::string& hdr_file);
 
   // Read-only accessors
   [[nodiscard]] const Mesh* mesh() const;
   [[nodiscard]] Mesh* mesh(); // non-const needed for RT vertex/index buffer
   [[nodiscard]] const GltfScene* scene() const;
-  [[nodiscard]] const ResourceDescriptor* default_descriptor() const;
-  [[nodiscard]] const std::vector<std::unique_ptr<ResourceDescriptor>>& material_descriptors() const;
-  [[nodiscard]] std::unique_ptr<ResourceDescriptor> take_default_descriptor();
-  [[nodiscard]] std::vector<std::unique_ptr<ResourceDescriptor>> take_material_descriptors();
   [[nodiscard]] int material_count() const;
   [[nodiscard]] const AABB& bounds() const;
+
+  /// Texture bindings for the default (non-scene) path.
+  [[nodiscard]] MaterialTextureSet default_texture_set() const;
+
+  /// Texture bindings for each material in the current scene.
+  [[nodiscard]] std::vector<MaterialTextureSet> material_texture_sets() const;
 
   // IBL delegation
   [[nodiscard]] const IBL* ibl() const;
@@ -100,10 +101,6 @@ private:
   // IBL
   IBLSettings m_ibl_settings;
   std::unique_ptr<IBL> m_ibl;
-
-  // Descriptors
-  std::unique_ptr<ResourceDescriptor> m_descriptor;
-  std::vector<std::unique_ptr<ResourceDescriptor>> m_material_descriptors;
 };
 
 } // namespace sps::vulkan

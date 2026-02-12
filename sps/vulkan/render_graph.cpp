@@ -1,5 +1,4 @@
 #include <sps/vulkan/render_graph.h>
-#include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/device.h>
 #include <sps/vulkan/renderer.h>
 #include <sps/vulkan/stages/composite_stage.h>
@@ -53,6 +52,7 @@ RenderGraph::~RenderGraph()
   // then we clean up graph-owned Vulkan resources.
   m_stages.clear();
   destroy_scene_framebuffers();
+  destroy_material_pool();
 
   if (m_material_layout && m_renderer)
   {
@@ -94,24 +94,137 @@ vk::DescriptorSetLayout RenderGraph::material_descriptor_layout() const
   return m_material_layout;
 }
 
-void RenderGraph::set_default_descriptor(std::unique_ptr<ResourceDescriptor> desc)
+void RenderGraph::destroy_material_pool()
 {
-  m_default_descriptor = std::move(desc);
+  if (m_material_pool && m_renderer)
+  {
+    m_renderer->device().device().destroyDescriptorPool(m_material_pool);
+    m_material_pool = VK_NULL_HANDLE;
+  }
+  m_default_sets.clear();
+  m_material_sets.clear();
 }
 
-void RenderGraph::set_material_descriptors(std::vector<std::unique_ptr<ResourceDescriptor>> descs)
+void RenderGraph::allocate_material_descriptors(
+  const MaterialTextureSet& default_textures,
+  const std::vector<MaterialTextureSet>& material_textures,
+  const std::vector<vk::DescriptorBufferInfo>& ubo_infos)
 {
-  m_material_descriptors = std::move(descs);
+  auto dev = m_renderer->device().device();
+
+  // Destroy old pool (implicitly frees all sets)
+  destroy_material_pool();
+
+  m_frames_in_flight = static_cast<uint32_t>(ubo_infos.size());
+  const uint32_t mat_count = static_cast<uint32_t>(material_textures.size());
+  const uint32_t sets_per_frame = 1 + mat_count; // 1 default + N materials
+  const uint32_t total_sets = sets_per_frame * m_frames_in_flight;
+
+  // Create pool
+  std::array<vk::DescriptorPoolSize, 2> pool_sizes{};
+  pool_sizes[0].type = vk::DescriptorType::eUniformBuffer;
+  pool_sizes[0].descriptorCount = total_sets; // 1 UBO per set
+  pool_sizes[1].type = vk::DescriptorType::eCombinedImageSampler;
+  pool_sizes[1].descriptorCount = total_sets * MaterialTextureSet::TEXTURE_COUNT;
+
+  vk::DescriptorPoolCreateInfo poolInfo{};
+  poolInfo.maxSets = total_sets;
+  poolInfo.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
+  poolInfo.pPoolSizes = pool_sizes.data();
+
+  m_material_pool = dev.createDescriptorPool(poolInfo);
+
+  // Batch-allocate all sets
+  std::vector<vk::DescriptorSetLayout> layouts(total_sets, m_material_layout);
+
+  vk::DescriptorSetAllocateInfo allocInfo{};
+  allocInfo.descriptorPool = m_material_pool;
+  allocInfo.descriptorSetCount = total_sets;
+  allocInfo.pSetLayouts = layouts.data();
+
+  auto all_sets = dev.allocateDescriptorSets(allocInfo);
+
+  // Distribute sets into the frame-indexed arrays
+  m_default_sets.resize(m_frames_in_flight);
+  m_material_sets.resize(m_frames_in_flight);
+
+  uint32_t idx = 0;
+  for (uint32_t f = 0; f < m_frames_in_flight; ++f)
+  {
+    m_default_sets[f] = all_sets[idx++];
+    m_material_sets[f].resize(mat_count);
+    for (uint32_t m = 0; m < mat_count; ++m)
+    {
+      m_material_sets[f][m] = all_sets[idx++];
+    }
+  }
+
+  // Write all sets
+  for (uint32_t f = 0; f < m_frames_in_flight; ++f)
+  {
+    write_material_set(m_default_sets[f], ubo_infos[f], default_textures);
+    for (uint32_t m = 0; m < mat_count; ++m)
+    {
+      write_material_set(m_material_sets[f][m], ubo_infos[f], material_textures[m]);
+    }
+  }
+
+  spdlog::info("Allocated {} material descriptor sets ({} frames x ({} materials + 1 default))",
+    total_sets, m_frames_in_flight, mat_count);
 }
 
-const ResourceDescriptor* RenderGraph::default_descriptor() const
+void RenderGraph::write_material_set(vk::DescriptorSet set,
+  const vk::DescriptorBufferInfo& ubo_info,
+  const MaterialTextureSet& textures)
 {
-  return m_default_descriptor.get();
+  // Build image infos for the 11 texture bindings
+  std::array<vk::DescriptorImageInfo, MaterialTextureSet::TEXTURE_COUNT> image_infos{};
+  for (uint32_t i = 0; i < MaterialTextureSet::TEXTURE_COUNT; ++i)
+  {
+    image_infos[i].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    image_infos[i].imageView = textures.textures[i].view;
+    image_infos[i].sampler = textures.textures[i].sampler;
+  }
+
+  // 12 writes: 1 UBO + 11 image samplers
+  std::array<vk::WriteDescriptorSet, 12> writes{};
+
+  // Binding 0: UBO
+  writes[0].dstSet = set;
+  writes[0].dstBinding = 0;
+  writes[0].dstArrayElement = 0;
+  writes[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+  writes[0].descriptorCount = 1;
+  writes[0].pBufferInfo = &ubo_info;
+
+  // Bindings 1-11: combined image samplers
+  for (uint32_t i = 0; i < MaterialTextureSet::TEXTURE_COUNT; ++i)
+  {
+    writes[i + 1].dstSet = set;
+    writes[i + 1].dstBinding = i + 1;
+    writes[i + 1].dstArrayElement = 0;
+    writes[i + 1].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    writes[i + 1].descriptorCount = 1;
+    writes[i + 1].pImageInfo = &image_infos[i];
+  }
+
+  m_renderer->device().device().updateDescriptorSets(writes, {});
 }
 
-const std::vector<std::unique_ptr<ResourceDescriptor>>& RenderGraph::material_descriptors() const
+vk::DescriptorSet RenderGraph::default_descriptor_set(uint32_t frame_index) const
 {
-  return m_material_descriptors;
+  return m_default_sets[frame_index];
+}
+
+vk::DescriptorSet RenderGraph::material_descriptor_set(
+  uint32_t frame_index, uint32_t material_index) const
+{
+  return m_material_sets[frame_index][material_index];
+}
+
+uint32_t RenderGraph::material_set_count() const
+{
+  return m_material_sets.empty() ? 0 : static_cast<uint32_t>(m_material_sets[0].size());
 }
 
 void RenderGraph::set_composite_stage(const CompositeStage* stage)
