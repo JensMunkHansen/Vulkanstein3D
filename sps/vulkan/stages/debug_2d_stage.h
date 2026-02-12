@@ -5,6 +5,7 @@
 namespace sps::vulkan
 {
 
+class RenderGraph;
 class ResourceDescriptor;
 class VulkanRenderer;
 
@@ -17,7 +18,7 @@ class Debug2DStage : public RenderStage
 {
 public:
   Debug2DStage(const VulkanRenderer& renderer, vk::RenderPass composite_render_pass,
-    vk::DescriptorSetLayout material_layout,
+    const RenderGraph& graph,
     const bool* enabled, const int* material_index);
   ~Debug2DStage() override;
 
@@ -30,6 +31,7 @@ public:
 
 private:
   const VulkanRenderer& m_renderer;
+  const RenderGraph& m_graph;
   const bool* m_enabled;
   const int* m_material_index;
 

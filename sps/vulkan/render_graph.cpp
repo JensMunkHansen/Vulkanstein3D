@@ -1,6 +1,8 @@
 #include <sps/vulkan/render_graph.h>
+#include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/device.h>
 #include <sps/vulkan/renderer.h>
+#include <sps/vulkan/stages/composite_stage.h>
 
 #include <spdlog/spdlog.h>
 
@@ -47,7 +49,74 @@ void begin_render_pass(const FrameContext& ctx, vk::RenderPass renderPass,
 
 RenderGraph::~RenderGraph()
 {
+  // Stages destroyed first (m_stages declared after m_material_layout),
+  // then we clean up graph-owned Vulkan resources.
+  m_stages.clear();
   destroy_scene_framebuffers();
+
+  if (m_material_layout && m_renderer)
+  {
+    m_renderer->device().device().destroyDescriptorSetLayout(m_material_layout);
+    m_material_layout = VK_NULL_HANDLE;
+  }
+}
+
+void RenderGraph::create_material_descriptor_layout()
+{
+  // 12 bindings matching the material descriptor used by SceneManager:
+  //   0: UBO (vertex + fragment)
+  //   1-11: combined image samplers (fragment only)
+  std::array<vk::DescriptorSetLayoutBinding, 12> bindings{};
+
+  bindings[0].binding = 0;
+  bindings[0].descriptorType = vk::DescriptorType::eUniformBuffer;
+  bindings[0].descriptorCount = 1;
+  bindings[0].stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+
+  for (uint32_t i = 1; i <= 11; ++i)
+  {
+    bindings[i].binding = i;
+    bindings[i].descriptorType = vk::DescriptorType::eCombinedImageSampler;
+    bindings[i].descriptorCount = 1;
+    bindings[i].stageFlags = vk::ShaderStageFlagBits::eFragment;
+  }
+
+  vk::DescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+  layoutInfo.pBindings = bindings.data();
+
+  m_material_layout = m_renderer->device().device().createDescriptorSetLayout(layoutInfo);
+  spdlog::info("Created graph-owned material descriptor layout (12 bindings)");
+}
+
+vk::DescriptorSetLayout RenderGraph::material_descriptor_layout() const
+{
+  return m_material_layout;
+}
+
+void RenderGraph::set_default_descriptor(std::unique_ptr<ResourceDescriptor> desc)
+{
+  m_default_descriptor = std::move(desc);
+}
+
+void RenderGraph::set_material_descriptors(std::vector<std::unique_ptr<ResourceDescriptor>> descs)
+{
+  m_material_descriptors = std::move(descs);
+}
+
+const ResourceDescriptor* RenderGraph::default_descriptor() const
+{
+  return m_default_descriptor.get();
+}
+
+const std::vector<std::unique_ptr<ResourceDescriptor>>& RenderGraph::material_descriptors() const
+{
+  return m_material_descriptors;
+}
+
+void RenderGraph::set_composite_stage(const CompositeStage* stage)
+{
+  m_composite_stage = stage;
 }
 
 void RenderGraph::record(const FrameContext& ctx)
@@ -127,7 +196,8 @@ void RenderGraph::record(const FrameContext& ctx)
     clearValues[0].color = vk::ClearColorValue{
       std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } };
 
-    begin_render_pass(ctx, m_render_passes[static_cast<int>(Phase::CompositePass)], ctx.composite_framebuffer,
+    begin_render_pass(ctx, m_render_passes[static_cast<int>(Phase::CompositePass)],
+      m_composite_stage->framebuffer(ctx.image_index),
       static_cast<uint32_t>(clearValues.size()), clearValues.data());
 
     for (auto& stage : m_stages)

@@ -4,6 +4,7 @@
 #include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/mesh.h>
+#include <sps/vulkan/render_graph.h>
 
 #include <glm/glm.hpp>
 
@@ -15,7 +16,8 @@ namespace sps::vulkan
 
 void RasterBlendStage::record(const FrameContext& ctx)
 {
-  if (!ctx.mesh || !ctx.scene || !ctx.material_descriptors || !ctx.camera)
+  const auto& mat_descs = m_graph.material_descriptors();
+  if (!ctx.mesh || !ctx.scene || mat_descs.empty() || !ctx.camera)
     return;
 
   // Collect blend primitives
@@ -95,7 +97,7 @@ void RasterBlendStage::record(const FrameContext& ctx)
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
       static_cast<uint32_t>(sizeof(pc)), &pc);
     ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout,
-      0, (*ctx.material_descriptors)[prim->materialIndex]->descriptor_set(), {});
+      0, mat_descs[prim->materialIndex]->descriptor_set(), {});
     ctx.command_buffer.drawIndexed(prim->indexCount, 1, prim->firstIndex, prim->vertexOffset, 0);
   }
 }

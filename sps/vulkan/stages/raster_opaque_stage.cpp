@@ -6,6 +6,7 @@
 #include <sps/vulkan/gltf_loader.h>
 #include <sps/vulkan/mesh.h>
 #include <sps/vulkan/pipeline.h>
+#include <sps/vulkan/render_graph.h>
 #include <sps/vulkan/renderer.h>
 #include <sps/vulkan/vertex.h>
 
@@ -15,13 +16,13 @@ namespace sps::vulkan
 {
 
 RasterOpaqueStage::RasterOpaqueStage(const VulkanRenderer& renderer,
-  vk::RenderPass scene_render_pass, vk::DescriptorSetLayout material_layout,
+  vk::RenderPass scene_render_pass, const RenderGraph& graph,
   const std::string& vertex_shader, const std::string& fragment_shader,
   const bool* use_rt, const bool* debug_2d)
   : RenderStage("RasterOpaqueStage")
   , m_renderer(renderer)
   , m_scene_render_pass(scene_render_pass)
-  , m_material_layout(material_layout)
+  , m_graph(graph)
   , m_use_rt(use_rt)
   , m_debug_2d(debug_2d)
   , m_vertex_shader(vertex_shader)
@@ -44,7 +45,7 @@ void RasterOpaqueStage::create_pipelines()
   specification.fragmentFilepath = m_fragment_shader;
   specification.swapchainExtent = m_renderer.swapchain().extent();
   specification.swapchainImageFormat = m_renderer.hdr_format();
-  specification.descriptorSetLayout = m_material_layout;
+  specification.descriptorSetLayout = m_graph.material_descriptor_layout();
 
   auto binding = Vertex::binding_description();
   auto attributes = Vertex::attribute_descriptions();
@@ -148,8 +149,9 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
 
   ctx.mesh->bind(ctx.command_buffer);
 
-  if (ctx.scene && !ctx.scene->primitives.empty() && ctx.material_descriptors &&
-    !ctx.material_descriptors->empty())
+  const auto& mat_descs = m_graph.material_descriptors();
+
+  if (ctx.scene && !ctx.scene->primitives.empty() && !mat_descs.empty())
   {
     // Multi-material scene: draw OPAQUE + MASK primitives
     ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
@@ -193,11 +195,11 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
         static_cast<uint32_t>(sizeof(pc)), &pc);
       ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout,
-        0, (*ctx.material_descriptors)[prim.materialIndex]->descriptor_set(), {});
+        0, mat_descs[prim.materialIndex]->descriptor_set(), {});
       ctx.command_buffer.drawIndexed(prim.indexCount, 1, prim.firstIndex, prim.vertexOffset, 0);
     }
   }
-  else
+  else if (m_graph.default_descriptor())
   {
     // Legacy single-draw path: opaque defaults
     ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
@@ -215,7 +217,7 @@ void RasterOpaqueStage::record(const FrameContext& ctx)
       vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0,
       static_cast<uint32_t>(sizeof(pc)), &pc);
     ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout, 0,
-      ctx.default_descriptor->descriptor_set(), {});
+      m_graph.default_descriptor()->descriptor_set(), {});
     ctx.mesh->draw(ctx.command_buffer);
   }
 }

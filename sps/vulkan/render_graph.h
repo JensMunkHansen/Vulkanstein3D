@@ -10,7 +10,9 @@
 namespace sps::vulkan
 {
 
+class CompositeStage;
 class Device;
+class ResourceDescriptor;
 class VulkanRenderer;
 
 /// Fixed-order render graph.
@@ -93,12 +95,34 @@ public:
   /// Destroy and recreate scene framebuffers (called during swapchain resize).
   void recreate_scene_framebuffers();
 
+  /// Create the canonical material descriptor set layout (12 bindings).
+  /// Call after set_renderer() but before adding stages that need it.
+  void create_material_descriptor_layout();
+
+  /// The graph-owned material descriptor set layout (stable, never recreated).
+  [[nodiscard]] vk::DescriptorSetLayout material_descriptor_layout() const;
+
+  /// Transfer descriptor ownership from SceneManager to the graph.
+  void set_default_descriptor(std::unique_ptr<ResourceDescriptor> desc);
+  void set_material_descriptors(std::vector<std::unique_ptr<ResourceDescriptor>> descs);
+
+  /// Graph-owned descriptor accessors (used by stages that need material descriptors).
+  [[nodiscard]] const ResourceDescriptor* default_descriptor() const;
+  [[nodiscard]] const std::vector<std::unique_ptr<ResourceDescriptor>>& material_descriptors() const;
+
+  /// Register the composite stage so the graph can query its framebuffer.
+  void set_composite_stage(const CompositeStage* stage);
+
   /// Shared image registry for cross-stage resource access.
   [[nodiscard]] SharedImageRegistry& image_registry() { return m_image_registry; }
   [[nodiscard]] const SharedImageRegistry& image_registry() const { return m_image_registry; }
 
 private:
   const VulkanRenderer* m_renderer{ nullptr };
+  const CompositeStage* m_composite_stage{ nullptr };
+  vk::DescriptorSetLayout m_material_layout{ VK_NULL_HANDLE };
+  std::unique_ptr<ResourceDescriptor> m_default_descriptor;
+  std::vector<std::unique_ptr<ResourceDescriptor>> m_material_descriptors;
   std::vector<std::unique_ptr<RenderStage>> m_stages;
   std::array<vk::RenderPass, 4> m_render_passes{};
   std::vector<vk::Framebuffer> m_scene_framebuffers;

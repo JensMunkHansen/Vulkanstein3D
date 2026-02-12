@@ -57,53 +57,53 @@ As stages become self-contained, `FrameContext` shrinks. Self-contained stages i
 
 | Resource | Owner | Consumers |
 |----------|-------|-----------|
-| Shared images (HDR, depth-stencil, MSAA) | `VulkanRenderer` | Stages via renderer getters |
+| Shared images (HDR, depth-stencil, MSAA) | `VulkanRenderer` | Stages via renderer getters; graph brokers via `SharedImageRegistry` |
+| Material descriptor layout (12 bindings) | `RenderGraph` | `RasterOpaqueStage`, `Debug2DStage` (query `graph.material_descriptor_layout()`) |
+| Material descriptor sets | `SceneManager` (own structurally identical layouts, Vulkan-compatible) | Bound per-draw via `FrameContext` |
+| Scene framebuffers | `RenderGraph` | Graph uses for scene render pass begin |
 | Render passes | App creates, graph brokers | Graph uses for begin/end; stages use for pipeline/framebuffer creation |
-| Pipeline, descriptors, framebuffers | Self-contained stages (CompositeStage) or app (others, migrating) | The stage itself |
+| Pipeline, descriptors, framebuffers | Self-contained stages (CompositeStage, RasterOpaqueStage, Debug2DStage, SSSBlurStage, RayTracingStage) or app (migrating) | The stage itself |
+
+### Completed improvements
+
+#### ~~Shared image registry in graph~~ (DONE)
+Graph owns `SharedImageRegistry` where app registers shared images ("hdr", "depth_stencil") and stages declare access intent. Used for framebuffer creation and stage construction.
+
+#### ~~Self-contained stages~~ (DONE)
+All stages own their pipelines/descriptors:
+- `CompositeStage` — owns pipeline, descriptors, framebuffers
+- `RasterOpaqueStage` / `RasterBlendStage` — opaque stage owns shared pipeline layout + both pipelines; blend stage queries opaque stage each frame
+- `Debug2DStage` — owns pipeline + layout
+- `SSSBlurStage` — compute pipeline + ping image + descriptors
+- `RayTracingStage` — owns storage image, descriptor, acceleration structures, pipeline
+
+#### ~~Graph-owned material descriptor layout~~ (DONE)
+Graph creates and owns one canonical material descriptor layout (binding 0: UBO vertex+fragment, bindings 1–11: combined image samplers fragment-only). Created once at startup, never recreated. Stages reference the graph to get this layout for pipeline creation. SceneManager continues creating its own `ResourceDescriptor` objects with structurally identical layouts — the Vulkan spec allows binding descriptor sets whose layout is "identically defined" to the pipeline's layout. This eliminated the fragile `update_descriptor_layout()` pattern that caused stale-handle crashes on shader mode switches after model/HDR loads.
 
 ### Future Improvements
 
-#### Near-term: Shared image registry in graph
-Graph brokers shared images (HDR, DS, ping) so stages query the graph instead of receiving raw `vk::Image` handles at construction. Avoids stale handles during swapchain recreation.
+#### Near-term: Graph-owned descriptor sets
 
-#### Near-term: More self-contained stages
-Migrate remaining stages to own their pipelines/descriptors following CompositeStage pattern:
-- `Debug2DStage` — similar to CompositeStage, straightforward
-- `SSSBlurStage` — compute pipeline + ping image + descriptors
-- `RasterOpaqueStage` / `RasterBlendStage` — share a pipeline layout, need coordinated approach
-- `RayTracingStage` — owns storage image, descriptor, acceleration structures, pipeline
+The material descriptor *layout* is now stable in the graph, but descriptor *sets* are still owned by SceneManager (each with its own duplicate layout). Next step: graph allocates descriptor sets from the graph-owned layout, SceneManager provides texture/buffer data without owning Vulkan descriptor objects.
 
-#### Near-term: Descriptor ownership refactor
+This follows the same incremental pattern: move ownership to the graph one piece at a time, verify each step works, no big-bang refactor.
 
-**Problem**: SceneManager currently owns descriptor set layouts, but stages consume them via cached handles. Any operation that recreates descriptors (model load, HDR switch) invalidates those handles. The current workaround (`update_descriptor_layout()` calls after every descriptor recreation) is fragile — missing a single call site causes a stale-handle crash on the next pipeline rebuild (e.g., shader mode switch).
+**Stages declare requirements at construction** — each stage holds a descriptor requirement spec using Vulkan enums (`vk::DescriptorType`) + intent (read/write/storage). This is a data description, not actual Vulkan handles.
 
-**Design**: Two-tier descriptor ownership based on sharing potential:
+**Graph creates and owns descriptor sets** — the graph creates descriptor sets from its layout and allocates from its pool. SceneManager provides texture views and buffer handles; graph writes the descriptor sets.
 
-1. **Graph-managed descriptors** — for consecutive stages that share the same bindings. The graph owns the descriptor set layout and allocates per-frame sets. Stages receive sets via `FrameContext`, never cache layout handles.
-   - RasterOpaqueStage + RasterBlendStage already share a pipeline layout. They should share a graph-managed material descriptor layout too.
-   - When a model is loaded, SceneManager provides textures/materials; the graph rebuilds descriptor sets against its stable layout.
+**Ring-buffering** — graph owns all shared resources and allocates N copies of mutable ones (descriptor sets, framebuffers, storage images). Stages never know N or whether multi-frame-in-flight is even active — they always access resources by `frame_index` from `FrameContext`. Same stage code works for N=1 (current) or N=3 (future). Changing the ring depth is a graph-level decision with zero stage changes.
 
-2. **Stage-owned descriptors** — for stages with unique binding requirements. The stage creates its own layout at construction and manages its own per-frame sets.
-   - Already done: CompositeStage, SSSBlurStage, RayTracingStage
-   - Future: pre-raycast thickness stage (needs AS + UBO + output image, no material textures)
-
-**Shader variants are the stage's responsibility**: A stage that supports multiple shaders (RasterOpaqueStage: PBR, thickness, debug modes) must ensure all shader variants conform to the same descriptor layout. Shader switch = pipeline swap only, never layout recreation. This eliminates the current stale-layout crash by design.
-
-**Lifecycle**:
-1. **Register** — Stages declare binding requirements to the graph at registration time.
-2. **Validate** — Graph checks compatibility across connected stages (same phase, shared layout). Catches mismatches at startup rather than at draw time.
-3. **Allocate** — Each stage requests resources from the graph. Graph creates shared layouts for compatible groups, private layouts for unique stages.
-4. **Ring-buffer** — Graph knows N (frames in flight) and allocates N copies of all mutable resources (descriptor sets, framebuffers, storage images). Stages never know N — they receive the right resource for the current frame via `frame_index` in `FrameContext`.
+**Shader variants are the stage's responsibility**: A stage that supports multiple shaders (RasterOpaqueStage: PBR, thickness, debug modes) must ensure all shader variants conform to the same descriptor layout. Shader switch = pipeline swap only, never layout recreation.
 
 **SceneManager's role shrinks**: Loads textures and materials, provides them to the graph or stages. No longer owns descriptor set layouts or pools.
 
 | Descriptor owner | Stages | Bindings |
 |-----------------|--------|----------|
-| Graph (shared) | RasterOpaque + RasterBlend | UBO + 12 material textures |
-| Stage (own) | CompositeStage | HDR sampler |
-| Stage (own) | SSSBlurStage | 2 storage images + depth sampler |
-| Stage (own) | RayTracingStage | AS + storage image + UBO + textures + material indices |
-| Stage (own) | Future thickness pre-raycast | AS + UBO + output storage image |
+| Graph (shared layout, sets TBD) | RasterOpaque + RasterBlend + Debug2D | UBO + 11 material textures |
+| Stage (private) | CompositeStage | HDR sampler |
+| Stage (private) | SSSBlurStage | 2 storage images + depth sampler |
+| Stage (private) | RayTracingStage | AS + storage image + UBO + textures + material indices |
 
 #### Medium-term: Multiple frames in flight
 Currently single-fence (one frame at a time). With self-contained stages, multiple frames in flight becomes a local decision per stage rather than a global one managed by the app. The graph provides a `frame_index` (0..N-1), and each stage indexes into its own ring of per-frame resources. Read-only resources (pipeline, sampler, render pass) stay shared; write-per-frame resources (descriptor sets, framebuffers) get indexed. The stage is the right granularity for knowing what needs duplication — the app shouldn't have to know that CompositeStage needs N descriptor sets but SSSBlurStage needs N ping images.
@@ -116,12 +116,25 @@ The descriptor ownership refactor (above) is a prerequisite: graph-managed descr
 - Graph specifies attachment formats per phase, stages don't need render pass handles
 - Simplifies swapchain recreation (no framebuffer rebuild)
 
-#### Long-term: Full render graph
-- Declarative resource creation (logical → physical during `compile()`)
-- Automatic barrier insertion from resource usage declarations
-- Automatic layout transitions (no manual `pipelineBarrier` in stages)
+#### Long-term: Full render graph (VTK-inspired pipeline architecture)
+
+**Vision** (not planned for implementation — north star for design decisions):
+
+All Vulkan resources (images, buffers, descriptors) inherit from a common base with reference counting and deferred destruction (destroyed when refcount hits 0, destruction system ensures correct ordering).
+
+Stages connect via **ports** that map to shader bindings (inputs/outputs declared per stage). An **executive** traverses the graph before rendering, queries each stage for its resource requirements and usage intent (read/write/storage), then orchestrates allocation, sharing, barriers, and layout transitions. This is a connection pass before any GPU work.
+
+The executive is an **interface** — different implementations provide different strategies:
+- Single-frame execution (current behavior)
+- Multiple frames in flight (ring-buffered resources)
 - Resource aliasing (reuse memory for non-overlapping lifetimes)
-- Compute stages for IBL regeneration, post-processing
+- Automatic barrier insertion from port declarations
+
+Multiple objects supported as first-class citizens (not just whole-scene swaps).
+
+Inspired by VTK's demand-driven pipeline: stages declare what they need, the executive decides how to provide it. Swap the executive, change the behavior, zero stage changes.
+
+**Current incremental path** (broker pattern, graph-shared vs stage-owned descriptors) is compatible with this direction — no architectural dead ends.
 
 ## Subsurface Scattering
 

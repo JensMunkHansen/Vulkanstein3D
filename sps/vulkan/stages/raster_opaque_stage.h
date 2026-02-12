@@ -7,6 +7,7 @@
 namespace sps::vulkan
 {
 
+class RenderGraph;
 class VulkanRenderer;
 
 /// Draws OPAQUE + MASK primitives using the opaque pipeline.
@@ -18,7 +19,7 @@ class RasterOpaqueStage : public RenderStage
 {
 public:
   RasterOpaqueStage(const VulkanRenderer& renderer,
-    vk::RenderPass scene_render_pass, vk::DescriptorSetLayout material_layout,
+    vk::RenderPass scene_render_pass, const RenderGraph& graph,
     const std::string& vertex_shader, const std::string& fragment_shader,
     const bool* use_rt, const bool* debug_2d);
   ~RasterOpaqueStage() override;
@@ -39,17 +40,14 @@ public:
   [[nodiscard]] const std::string& current_vertex_shader() const { return m_vertex_shader; }
   [[nodiscard]] const std::string& current_fragment_shader() const { return m_fragment_shader; }
 
-  /// Update the cached descriptor set layout (call after model switch).
-  void update_descriptor_layout(vk::DescriptorSetLayout layout) { m_material_layout = layout; }
-
   /// Shared resources for RasterBlendStage.
   [[nodiscard]] vk::Pipeline blend_pipeline() const { return m_blend_pipeline; }
   [[nodiscard]] vk::PipelineLayout pipeline_layout() const { return m_pipeline_layout; }
 
 private:
   const VulkanRenderer& m_renderer;
-  vk::RenderPass m_scene_render_pass;         // non-owning
-  vk::DescriptorSetLayout m_material_layout;  // non-owning
+  vk::RenderPass m_scene_render_pass;  // non-owning
+  const RenderGraph& m_graph;
   const bool* m_use_rt;
   const bool* m_debug_2d;
 

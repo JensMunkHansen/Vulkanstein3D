@@ -64,6 +64,8 @@ public:
   [[nodiscard]] const GltfScene* scene() const;
   [[nodiscard]] const ResourceDescriptor* default_descriptor() const;
   [[nodiscard]] const std::vector<std::unique_ptr<ResourceDescriptor>>& material_descriptors() const;
+  [[nodiscard]] std::unique_ptr<ResourceDescriptor> take_default_descriptor();
+  [[nodiscard]] std::vector<std::unique_ptr<ResourceDescriptor>> take_material_descriptors();
   [[nodiscard]] int material_count() const;
   [[nodiscard]] const AABB& bounds() const;
 

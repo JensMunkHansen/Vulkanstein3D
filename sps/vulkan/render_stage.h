@@ -15,7 +15,6 @@ class Camera;
 class Device;
 struct GltfScene;
 class Mesh;
-class ResourceDescriptor;
 
 /// Execution phase for render stages.
 /// Determines which render pass (if any) the stage runs in.
@@ -36,17 +35,10 @@ struct FrameContext
   uint32_t frame_index{ 0 }; // Index into per-frame resource rings (0..frames_in_flight-1)
   vk::Extent2D extent;
 
-  // Composite render pass infrastructure (swapchain target)
-  vk::Framebuffer composite_framebuffer;
-
   // Scene data (read-only, not owned)
   const Mesh* mesh;
   const GltfScene* scene;
   const Camera* camera;
-
-  // Descriptors (shared, not owned)
-  const ResourceDescriptor* default_descriptor;
-  const std::vector<std::unique_ptr<ResourceDescriptor>>* material_descriptors;
 
   // Clear color (background)
   glm::vec3 clear_color{ 0.0f, 0.0f, 0.0f };

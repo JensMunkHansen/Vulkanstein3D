@@ -6,6 +6,7 @@ namespace sps::vulkan
 {
 
 class RasterOpaqueStage;
+class RenderGraph;
 
 /// Draws BLEND primitives sorted back-to-front using the blend pipeline.
 /// Depth write is disabled; alpha blending is enabled.
@@ -15,10 +16,11 @@ class RasterOpaqueStage;
 class RasterBlendStage : public RenderStage
 {
 public:
-  RasterBlendStage(const RasterOpaqueStage& opaque_stage,
+  RasterBlendStage(const RasterOpaqueStage& opaque_stage, const RenderGraph& graph,
     const bool* use_rt, const bool* debug_2d)
     : RenderStage("RasterBlendStage")
     , m_opaque(opaque_stage)
+    , m_graph(graph)
     , m_use_rt(use_rt)
     , m_debug_2d(debug_2d)
   {
@@ -29,6 +31,7 @@ public:
 
 private:
   const RasterOpaqueStage& m_opaque;
+  const RenderGraph& m_graph;
   const bool* m_use_rt;
   const bool* m_debug_2d;
 };

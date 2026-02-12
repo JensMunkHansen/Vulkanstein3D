@@ -150,6 +150,8 @@ Application::Application(int argc, char** argv)
 
   m_scene_manager->create_descriptors(m_uniform_buffer->buffer());
 
+  // Descriptor transfer happens in finalize_setup after graph is ready
+
   // Create scene render pass (pipelines created by RasterOpaqueStage in finalize_setup)
   create_scene_renderpass();
 
@@ -481,12 +483,9 @@ void Application::record_draw_commands(vk::CommandBuffer commandBuffer, uint32_t
   ctx.command_buffer = commandBuffer;
   ctx.image_index = imageIndex;
   ctx.extent = m_renderer->swapchain().extent();
-  ctx.composite_framebuffer = m_composite_stage->framebuffer(imageIndex);
   ctx.mesh = m_scene_manager->mesh();
   ctx.scene = m_scene_manager->scene();
   ctx.camera = &m_camera;
-  ctx.default_descriptor = m_scene_manager->default_descriptor();
-  ctx.material_descriptors = &m_scene_manager->material_descriptors();
   ctx.clear_color = m_clear_color;
 
   m_render_graph.record(ctx);
@@ -671,11 +670,11 @@ void Application::create_scene_renderpass()
 void Application::create_raster_stages()
 {
   m_raster_opaque_stage = m_render_graph.add<RasterOpaqueStage>(
-    *m_renderer, m_scene_renderpass, m_scene_manager->default_descriptor()->layout(),
+    *m_renderer, m_scene_renderpass, m_render_graph,
     std::string(SHADER_DIR "vertex.spv"), std::string(SHADER_DIR "fragment.spv"),
     &m_use_raytracing, &m_debug_2d_mode);
   m_raster_blend_stage = m_render_graph.add<RasterBlendStage>(
-    *m_raster_opaque_stage, &m_use_raytracing, &m_debug_2d_mode);
+    *m_raster_opaque_stage, m_render_graph, &m_use_raytracing, &m_debug_2d_mode);
 }
 
 
@@ -758,16 +757,12 @@ void Application::reload_shaders(
   const std::string& vertex_shader, const std::string& fragment_shader)
 {
   m_renderer->device().wait_idle();
-  // Ensure descriptor layout is current before pipeline recreation
-  m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
   m_raster_opaque_stage->reload_shaders(vertex_shader, fragment_shader);
 }
 
 void Application::apply_shader_mode(int mode)
 {
   m_renderer->device().wait_idle();
-  // Ensure descriptor layout is current before pipeline recreation
-  m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
   m_raster_opaque_stage->apply_shader_mode(mode);
 }
 
@@ -1008,6 +1003,10 @@ void Application::load_model(int index)
   if (!result.success)
     return;
 
+  // Transfer new descriptors to graph
+  m_render_graph.set_default_descriptor(m_scene_manager->take_default_descriptor());
+  m_render_graph.set_material_descriptors(m_scene_manager->take_material_descriptors());
+
   // Camera + light reset
   if (result.bounds.valid())
   {
@@ -1023,10 +1022,6 @@ void Application::load_model(int index)
       point->set_position(center + glm::normalize(glm::vec3(1, 1, 0.5f)) * radius * 2.0f);
     }
   }
-
-  // Update raster stages with new descriptor layout (old one was destroyed in create_descriptors)
-  if (m_raster_opaque_stage)
-    m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
 
   // RT rebuild (delegated to self-contained stage)
   if (m_ray_tracing_stage && m_scene_manager->mesh())
@@ -1047,11 +1042,12 @@ void Application::load_hdr(int index)
 
   m_renderer->device().wait_idle();
   m_scene_manager->load_hdr(m_hdr_files[index], m_uniform_buffer->buffer());
-  m_current_hdr_index = index;
 
-  // Update raster stages with new descriptor layout (load_hdr rebuilds descriptors)
-  if (m_raster_opaque_stage)
-    m_raster_opaque_stage->update_descriptor_layout(m_scene_manager->default_descriptor()->layout());
+  // Transfer rebuilt descriptors to graph (IBL textures changed)
+  m_render_graph.set_default_descriptor(m_scene_manager->take_default_descriptor());
+  m_render_graph.set_material_descriptors(m_scene_manager->take_material_descriptors());
+
+  m_current_hdr_index = index;
 
   // Update RT environment cubemap
   if (m_ray_tracing_stage && m_scene_manager->ibl())
@@ -1148,6 +1144,7 @@ void Application::finalize_setup()
 
   // Populate shared image registry (before framebuffer and stage construction)
   m_render_graph.set_renderer(*m_renderer);
+  m_render_graph.create_material_descriptor_layout();
   m_render_graph.image_registry().set("hdr",
     { m_renderer->hdr_image(), m_renderer->hdr_image_view(), {}, m_renderer->hdr_format() });
   m_render_graph.image_registry().set("depth_stencil",
@@ -1170,10 +1167,15 @@ void Application::finalize_setup()
     &m_sss_blur_width_r, &m_sss_blur_width_g, &m_sss_blur_width_b);
   m_composite_stage = m_render_graph.add<CompositeStage>(
     *m_renderer, m_composite_renderpass, &m_exposure, &m_tonemap_mode);
+  m_render_graph.set_composite_stage(m_composite_stage);
   m_debug_2d_stage = m_render_graph.add<Debug2DStage>(
-    *m_renderer, m_composite_renderpass, m_scene_manager->default_descriptor()->layout(),
+    *m_renderer, m_composite_renderpass, m_render_graph,
     &m_debug_2d_mode, &m_debug_material_index);
   m_ui_stage = m_render_graph.add<UIStage>(&m_ui_render_callback);
+
+  // Transfer descriptor ownership from SceneManager to graph
+  m_render_graph.set_default_descriptor(m_scene_manager->take_default_descriptor());
+  m_render_graph.set_material_descriptors(m_scene_manager->take_material_descriptors());
 }
 
 VkInstance Application::vk_instance() const

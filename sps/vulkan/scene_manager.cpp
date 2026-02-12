@@ -325,9 +325,19 @@ const std::vector<std::unique_ptr<ResourceDescriptor>>& SceneManager::material_d
   return m_material_descriptors;
 }
 
+std::unique_ptr<ResourceDescriptor> SceneManager::take_default_descriptor()
+{
+  return std::move(m_descriptor);
+}
+
+std::vector<std::unique_ptr<ResourceDescriptor>> SceneManager::take_material_descriptors()
+{
+  return std::move(m_material_descriptors);
+}
+
 int SceneManager::material_count() const
 {
-  return static_cast<int>(m_material_descriptors.size());
+  return m_scene ? static_cast<int>(m_scene->materials.size()) : 0;
 }
 
 const AABB& SceneManager::bounds() const

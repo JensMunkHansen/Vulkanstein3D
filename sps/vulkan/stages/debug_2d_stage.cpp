@@ -4,6 +4,7 @@
 #include <sps/vulkan/config.h>
 #include <sps/vulkan/descriptor_builder.h>
 #include <sps/vulkan/pipeline.h>
+#include <sps/vulkan/render_graph.h>
 #include <sps/vulkan/renderer.h>
 
 #include <algorithm>
@@ -12,14 +13,15 @@ namespace sps::vulkan
 {
 
 Debug2DStage::Debug2DStage(const VulkanRenderer& renderer,
-  vk::RenderPass composite_render_pass, vk::DescriptorSetLayout material_layout,
+  vk::RenderPass composite_render_pass, const RenderGraph& graph,
   const bool* enabled, const int* material_index)
   : RenderStage("Debug2DStage")
   , m_renderer(renderer)
+  , m_graph(graph)
   , m_enabled(enabled)
   , m_material_index(material_index)
 {
-  create_pipeline(composite_render_pass, material_layout);
+  create_pipeline(composite_render_pass, graph.material_descriptor_layout());
   spdlog::info("Created 2D debug stage (self-contained)");
 }
 
@@ -61,12 +63,13 @@ void Debug2DStage::record(const FrameContext& ctx)
   ctx.command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
 
   // Use selected material descriptor if available, otherwise default
-  const auto* desc = ctx.default_descriptor;
-  if (ctx.material_descriptors && !ctx.material_descriptors->empty())
+  const auto& mat_descs = m_graph.material_descriptors();
+  const auto* desc = m_graph.default_descriptor();
+  if (!mat_descs.empty())
   {
     int idx = std::clamp(*m_material_index, 0,
-      static_cast<int>(ctx.material_descriptors->size()) - 1);
-    desc = (*ctx.material_descriptors)[idx].get();
+      static_cast<int>(mat_descs.size()) - 1);
+    desc = mat_descs[idx].get();
   }
 
   ctx.command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline_layout,
